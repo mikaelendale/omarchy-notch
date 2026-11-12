@@ -1,0 +1,52 @@
+[popups]
+# Every panel that opens from the notch (Wi-Fi, Bluetooth, audio...), the dock,
+# dropdowns and the volume/brightness OSD: the theme's own colours, frosted
+# (blurred by Hyprland) with a soft edge. The tint is thick enough that a busy
+# wallpaper can't show through as shapes, so every theme looks like itself.
+background-alpha = 0.86
+border           = "hyprland.active-border-foreground"
+border-alpha     = 0.18
+border-width     = 1
+
+[tooltip]
+background-alpha = 0.92
+border           = "hyprland.active-border-foreground"
+border-alpha     = 0.18
+
+[notifications]
+background-alpha = 0.88
+border           = "hyprland.active-border-foreground"
+border-alpha     = 0.18
+border-width     = 1
+
+[launcher]
+background-alpha          = 0.9
+border                    = "hyprland.active-border-foreground"
+border-alpha              = 0.18
+scrim-alpha               = 0.22
+selected-background-alpha = 0.1
+selected-border-alpha     = 0.0
+
+[menu]
+background-alpha          = 0.9
+border                    = "hyprland.active-border-foreground"
+border-alpha              = 0.18
+scrim-alpha               = 0.22
+selected-background-alpha = 0.1
+selected-border-alpha     = 0.0
+
+[polkit]
+background-alpha = 0.92
+border-alpha     = 0.3
+scrim-alpha      = 0.35
+
+[controls]
+# Buttons, rows and dropdowns inside those surfaces: soft fills, no outlines.
+normal-fill-alpha         = 0.07
+normal-border-width       = 0
+hover-cursor-fill-alpha   = 0.12
+hover-cursor-border-width = 0
+focus-fill-alpha          = 0.12
+focus-border-width        = 0
+selected-fill-alpha       = 0.18
+selected-border-width     = 0

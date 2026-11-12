@@ -1,0 +1,763 @@
+#!/usr/bin/env python3
+"""Switch the notch look on and off, all at once or one part at a time.
+
+  notch-look                       show what's on
+  notch-look off                   everything back to stock Omarchy
+  notch-look on                    everything on
+  notch-look bar on|off            the notch bar, or Omarchy's own bar
+  notch-look side on|off           the side strip of icons
+  notch-look round <px>|off        corner rounding for windows and pop-ups
+                                   (14 is the notch look; off is Omarchy's square)
+  notch-look surfaces on|off       frosted pop-ups, menus and notifications in
+                                   your theme's colours
+  notch-look claude-toasts notch|desktop
+                                   Claude "needs you" alerts in the notch, or as
+                                   desktop notifications from the sessions widget
+  notch-look notifications notch|corner
+                                   every notification centred right under the
+                                   notch, or Omarchy's usual top-right corner
+  notch-look windows under|below   full screen (windows run under the notch), or
+                                   the notch keeps a strip and windows start below
+  notch-look motion on|off         smoother window animations and soft shadows
+  notch-look bell on|off           a terminal's bell marks its window as needing
+                                   you, so agents other than Claude can say so
+                                   (foot only)
+  notch-look dock frosted|plain    a frosted, rounded backing behind the dock's icons
+
+Every change is undone by the opposite command; nothing of Omarchy's own
+is touched. The files it manages:
+  ~/.config/hypr/looknfeel.lua        (blocks between "notch-look: rounding",
+                                       "frost" and "motion" markers)
+  ~/.config/omarchy/shell.toml        (block between "notch-look: surfaces" markers)
+  ~/.config/foot/foot.ini             (block between "notch-look: bell" markers)
+  ~/.config/omarchy/shell.json        (bar.id, plugins, claude-sessions notify)
+  ~/.local/state/mike-notch/*.json    (side strip, preferences, the bar you had)
+  ~/.config/omarchy/plugins/<you>.notifications, <you>.dock
+                                      (copies of Omarchy's notifications and dock
+                                       with a few lines changed; rebuilt from
+                                       Omarchy's latest after every `omarchy update`)
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+LOOKNFEEL = os.path.join(HOME, ".config/hypr/looknfeel.lua")
+SHELL_TOML = os.path.join(HOME, ".config/omarchy/shell.toml")
+SHELL_JSON = os.path.join(HOME, ".config/omarchy/shell.json")
+# This plugin's folder, wherever it was installed (notch-look lives in its bin/,
+# and is linked into ~/.local/bin).
+PLUGIN = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+SURFACES = os.path.join(PLUGIN, "look/surfaces.toml")
+STATE = os.path.join(HOME, ".local/state/mike-notch")
+SIDE = os.path.join(STATE, "side.json")
+PREFS = os.path.join(STATE, "prefs.json")
+# The bar in use before `notch-look on`, put back by `notch-look off`.
+PREVIOUS = os.path.join(STATE, "previous.json")
+
+PLUGINS = os.path.join(HOME, ".config/omarchy/plugins")
+USERNAME = os.environ.get("USER") or os.path.basename(HOME)
+HOOK = os.path.join(HOME, ".config/omarchy/hooks/post-update.d/notch-notifications")
+
+# Copies of Omarchy's own plugins with a few lines changed. Each is rebuilt
+# from the installed version after every `omarchy update` (the hook above), so
+# it keeps Omarchy's fixes; if a change no longer fits, it falls back to the
+# original instead of breaking.
+CLONES = {
+    "notifications": {
+        "source": "omarchy.notifications",
+        "dir": "/usr/share/omarchy/shell/plugins/notifications",
+        # Hang the stack centred under the notch, not in the top-right corner.
+        "files": {"Service.qml": [
+            (
+                "      anchors { top: true; bottom: true; right: true }\n",
+                "      // notch-look: centred under the notch, not in the top-right corner.\n"
+                "      anchors { top: true; bottom: true }\n",
+            ),
+            (
+                "        anchors.right: parent.right\n"
+                "        anchors.top: parent.top\n"
+                "        anchors.topMargin: surface.margins.top\n",
+                "        anchors.horizontalCenter: parent.horizontalCenter\n"
+                "        anchors.top: parent.top\n"
+                "        anchors.topMargin: surface.margins.top\n",
+            ),
+            (
+                "    return Delivery.deckMargins(barPosition, Delivery.barThickness(barRef, screenName, defaultBarSize), Style.gapsOut)\n",
+                "    // notch-look: hangs centred under the notch, below however far down it\n"
+                "    // reaches right now (closed, showing a toast, or open), and no margin\n"
+                "    // from the right edge.\n"
+                "    var m = Delivery.deckMargins(barPosition, Delivery.barThickness(barRef, screenName, defaultBarSize), Style.gapsOut)\n"
+                "    return { top: Math.max(m.top, service.notchClearance), right: 0 }\n",
+            ),
+            (
+                "  readonly property int notificationWidth: Style.space(380)\n",
+                "  // notch-look: the notch writes how far down it reaches; a copy can't ask\n"
+                "  // the bar, so it reads that file.\n"
+                "  property int notchClearance: 42\n"
+                "  FileView {\n"
+                "    path: Quickshell.env(\"HOME\") + \"/.local/state/mike-notch/notch.json\"\n"
+                "    watchChanges: true\n"
+                "    printErrors: false\n"
+                "    onFileChanged: reload()\n"
+                "    onLoaded: {\n"
+                "      try { var h = Number(JSON.parse(text()).height); if (h > 0) service.notchClearance = Math.round(h) + 8 } catch (e) {}\n"
+                "    }\n"
+                "  }\n"
+                "  readonly property int notificationWidth: Style.space(380)\n",
+            ),
+        ]},
+    },
+    "dock": {
+        "source": "omarchy.dock",
+        "dir": "/usr/share/omarchy/shell/plugins/dock",
+        # The dock in the notch's language: flush on the screen edge with its
+        # frosted glass flaring into it (DockGlass), bigger icons with room to
+        # breathe, a dot under each open app (DockDot), the app's name on hover
+        # (DockLabel), a hairline after the all-apps button (DockSeparator), and
+        # the notch's spring. Those four files come from look/dock. And since a
+        # copy can't read shell.json through the shell, its pinned apps and
+        # position come from the file (pins are saved with `omarchy-dock
+        # pinned`, which writes the same file).
+        "add": {name: os.path.join(PLUGIN, "look/dock", name)
+                for name in ("DockGlass.qml", "DockDot.qml", "DockLabel.qml", "DockSeparator.qml")},
+        "files": {"DockWindow.qml": [
+            (
+                "  readonly property int iconSize: Math.round(36 * Style.fontScale)\n",
+                "  // notch-look: a little bigger.\n"
+                "  readonly property int iconSize: Math.round(40 * Style.fontScale)\n",
+            ),
+            (
+                "  readonly property int iconInset: Style.spacing.md\n",
+                "  // notch-look: more air round each icon, and room beneath it for the\n"
+                "  // open-app dot.\n"
+                "  readonly property int iconInset: Style.spacing.md + Math.round(3 * Style.fontScale)\n",
+            ),
+            (
+                "    x: window.position === \"left\" ? window.gap - tuck\n"
+                "      : window.position === \"right\" ? window.width - width - window.gap + tuck\n"
+                "      : Math.round((window.width - width) / 2)\n"
+                "    y: window.position === \"top\" ? window.gap - tuck\n"
+                "      : window.position === \"bottom\" ? window.height - height - window.gap + tuck\n"
+                "      : Math.round((window.height - height) / 2)\n",
+                "    // notch-look: flush on the screen edge, which its glass flares into.\n"
+                "    x: window.position === \"left\" ? -tuck\n"
+                "      : window.position === \"right\" ? window.width - width + tuck\n"
+                "      : Math.round((window.width - width) / 2)\n"
+                "    y: window.position === \"top\" ? -tuck\n"
+                "      : window.position === \"bottom\" ? window.height - height + tuck\n"
+                "      : Math.round((window.height - height) / 2)\n",
+            ),
+            (
+                "    Grid {\n      id: slots\n",
+                "    // notch-look: the dock's frosted body, flaring into the screen edge.\n"
+                "    DockGlass { edge: window.position }\n\n"
+                "    Grid {\n      id: slots\n",
+            ),
+            (
+                "      scale: appsSlot.hovered ? 1.15 : 1\n"
+                "      transformOrigin: window.popOrigin\n\n"
+                "      Behavior on scale { NumberAnimation { duration: Style.duration(120); easing.type: Easing.OutCubic } }\n",
+                "      scale: appsSlot.hovered ? 1.12 : 1\n"
+                "      transformOrigin: window.popOrigin\n\n"
+                "      // notch-look: the notch's spring, quick and settled.\n"
+                "      Behavior on scale { enabled: !Style.reduceMotion; SpringAnimation { spring: 11; damping: 0.85; epsilon: 0.002 } }\n",
+            ),
+            (
+                "    // A grid of app squares reads as \"all apps\" in any icon theme. Drawn\n",
+                "    // notch-look: a hairline between this button and the apps, and its\n"
+                "    // name while the pointer is on it.\n"
+                "    DockSeparator {\n"
+                "      visible: appRepeater.count > 0\n"
+                "      vertical: window.vertical\n"
+                "      slotSize: window.slotSize\n"
+                "      length: Math.round(window.iconSize * 0.6)\n"
+                "    }\n\n"
+                "    DockLabel {\n"
+                "      text: \"All apps\"\n"
+                "      shown: appsSlot.hovered && !window.menuOpen\n"
+                "      edge: window.position\n"
+                "      slotSize: window.slotSize\n"
+                "    }\n\n"
+                "    // A grid of app squares reads as \"all apps\" in any icon theme. Drawn\n",
+            ),
+            (
+                "      opacity: appSlot.launching ? appSlot.pulse : (appSlot.windowCount > 0 ? 1 : window.idleOpacity)\n",
+                "      // notch-look: every app in full; the dot beneath says which are open.\n"
+                "      opacity: appSlot.launching ? appSlot.pulse : 1\n",
+            ),
+            (
+                "      scale: appSlot.lifted || appSlot.hovered ? 1.15 : 1\n"
+                "      transformOrigin: window.popOrigin\n\n"
+                "      Behavior on scale { NumberAnimation { duration: Style.duration(120); easing.type: Easing.OutCubic } }\n"
+                "    }\n",
+                "      scale: appSlot.lifted ? 1.15 : appSlot.hovered ? 1.12 : 1\n"
+                "      transformOrigin: window.popOrigin\n\n"
+                "      // notch-look: the notch's spring, quick and settled.\n"
+                "      Behavior on scale { enabled: !Style.reduceMotion; SpringAnimation { spring: 11; damping: 0.85; epsilon: 0.002 } }\n"
+                "    }\n\n"
+                "    // notch-look: a dot beneath an open app (a short bar for the one in\n"
+                "    // use), and the app's name while the pointer is on it.\n"
+                "    DockDot {\n"
+                "      running: appSlot.windowCount > 0\n"
+                "      focused: {\n"
+                "        var item = appSlot.modelData\n"
+                "        if (!item) return false\n"
+                "        for (var i = 0; i < item.windows.length; i++)\n"
+                "          if (item.windows[i].toplevel && item.windows[i].toplevel.activated) return true\n"
+                "        return false\n"
+                "      }\n"
+                "      edge: window.position\n"
+                "      slotSize: window.slotSize\n"
+                "      iconInset: window.iconInset\n"
+                "      shift: appSlot.displayedShift\n"
+                "    }\n\n"
+                "    DockLabel {\n"
+                "      text: {\n"
+                "        var entry = window.dock && appSlot.modelData ? window.dock.entryFor(appSlot.modelData) : null\n"
+                "        return entry && entry.name ? entry.name : (appSlot.modelData ? appSlot.modelData.key : \"\")\n"
+                "      }\n"
+                "      shown: appSlot.hovered && !window.menuOpen && !window.dragging\n"
+                "      edge: window.position\n"
+                "      slotSize: window.slotSize\n"
+                "      shift: appSlot.displayedShift\n"
+                "    }\n",
+            ),
+        ],
+        "Dock.qml": [
+            (
+                "  readonly property var dockConfig: shell && shell.shellConfig && shell.shellConfig.dock ? shell.shellConfig.dock : ({})\n",
+                "  // notch-look: a copy can't read shell.json through the shell, so it reads\n"
+                "  // the dock's settings from the file; pins are saved with `omarchy-dock\n"
+                "  // pinned`, which writes the same file.\n"
+                "  property var fileDockConfig: ({})\n"
+                "  FileView {\n"
+                "    path: Quickshell.env(\"HOME\") + \"/.config/omarchy/shell.json\"\n"
+                "    watchChanges: true\n"
+                "    printErrors: false\n"
+                "    onFileChanged: reload()\n"
+                "    onLoaded: {\n"
+                "      try { var c = JSON.parse(text()); root.fileDockConfig = c && c.dock ? c.dock : ({}) } catch (e) {}\n"
+                "    }\n"
+                "  }\n"
+                "  readonly property var dockConfig: shell && shell.shellConfig && shell.shellConfig.dock ? shell.shellConfig.dock : root.fileDockConfig\n",
+            ),
+        ]},
+    },
+}
+
+
+def clone_id(name):
+    return f"{USERNAME}.{name}"
+
+
+def clone_dir(name):
+    return os.path.join(PLUGINS, clone_id(name))
+
+
+FOOT = os.path.join(HOME, ".config/foot/foot.ini")
+FROST_START = "-- notch-look: frost"
+FROST_END = "-- notch-look: end frost"
+MOTION_START = "-- notch-look: motion"
+MOTION_END = "-- notch-look: end motion"
+BELL_START = "# notch-look: bell"
+BELL_END = "# notch-look: end bell"
+
+FROST_BLOCK = """-- notch-look: frost (managed by `notch-look surfaces on|off`)
+-- Frosted glass behind the notch, the side strip, the dock, notifications and
+-- Omarchy's panels, using Omarchy's own glass blur (so `omarchy toggle
+-- animations`, which turns blur off on slow GPUs, still wins).
+require("default.hypr.glass")()
+hl.layer_rule({
+  match = { namespace = "^(mike-notch|mike-side-notch|omarchy-dock|omarchy-dock-apps|omarchy-notifications|omarchy-keyboard-panel|omarchy-osd|omarchy-reminders)$" },
+  blur = true,
+  ignore_alpha = 0.04,
+})
+-- Menus dim the screen behind them a little; only their card is frosted.
+hl.layer_rule({
+  match = { namespace = "^(omarchy-menu|omarchy-clipboard|omarchy-emojis)$" },
+  blur = true,
+  ignore_alpha = 0.5,
+})
+-- notch-look: end frost
+"""
+
+MOTION_BLOCK = """-- notch-look: motion (managed by `notch-look motion on|off`)
+-- Smooth, iOS-like window motion: quick off the mark, soft to rest, with
+-- workspaces sliding and a soft shadow under each window.
+hl.curve("notchOut", { type = "bezier", points = { { 0.16, 1 }, { 0.3, 1 } } })
+hl.curve("notchSoft", { type = "bezier", points = { { 0.32, 0.72 }, { 0, 1 } } })
+hl.curve("notchInOut", { type = "bezier", points = { { 0.65, 0 }, { 0.35, 1 } } })
+hl.animation({ leaf = "windowsIn", enabled = true, speed = 4.2, bezier = "notchOut", style = "popin 90%" })
+hl.animation({ leaf = "windowsOut", enabled = true, speed = 2.4, bezier = "notchInOut", style = "popin 94%" })
+hl.animation({ leaf = "windowsMove", enabled = true, speed = 4.6, bezier = "notchOut" })
+hl.animation({ leaf = "fadeIn", enabled = true, speed = 3.2, bezier = "notchSoft" })
+hl.animation({ leaf = "fadeOut", enabled = true, speed = 2.6, bezier = "notchSoft" })
+hl.animation({ leaf = "workspaces", enabled = true, speed = 4.4, bezier = "notchOut", style = "slide" })
+hl.animation({ leaf = "specialWorkspace", enabled = true, speed = 4.4, bezier = "notchOut", style = "slidevert" })
+hl.animation({ leaf = "layersIn", enabled = true, speed = 3.6, bezier = "notchOut", style = "popin 94%" })
+hl.animation({ leaf = "layersOut", enabled = true, speed = 2.4, bezier = "notchInOut", style = "fade" })
+hl.config({ decoration = { shadow = { enabled = true, range = 22, render_power = 3, color = "rgba(00000048)" } } })
+-- notch-look: end motion
+"""
+
+BELL_BLOCK = """# notch-look: bell (managed by `notch-look bell on|off`)
+# A program ringing the bell in a window you're not looking at (as coding
+# agents do when they need you) is noted, and the notch shows that window's
+# agent as "needs you".
+[bell]
+command=""" + os.path.join(PLUGIN, "bell.sh") + """
+# notch-look: end bell
+"""
+
+ROUND_START = "-- notch-look: rounding"
+ROUND_END = "-- notch-look: end rounding"
+SURF_START = "# notch-look: surfaces"
+SURF_END = "# notch-look: end surfaces"
+DEFAULT_ROUND = 14
+
+
+def run(*args, quiet=True):
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=20)
+        return out.returncode, (out.stdout or "") + (out.stderr or "")
+    except (OSError, subprocess.SubprocessError) as error:
+        return 1, str(error)
+
+
+def read(path, default=""):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return default
+
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".notch-look.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(tmp, path)
+
+
+def read_json(path):
+    try:
+        return json.loads(read(path) or "{}")
+    except ValueError:
+        return {}
+
+
+def cut_block(text, start, end):
+    """(text without the marked block, the block or None)."""
+    i = text.find(start)
+    if i < 0:
+        return text, None
+    j = text.find(end, i)
+    if j < 0:
+        return text, None
+    j = text.find("\n", j)
+    j = len(text) if j < 0 else j + 1
+    return text[:i].rstrip("\n") + "\n" + text[j:].lstrip("\n"), text[i:j]
+
+
+# --------------------------------------------------------------- rounding
+
+def rounding_now():
+    _, block = cut_block(read(LOOKNFEEL), ROUND_START, ROUND_END)
+    if not block:
+        return 0
+    m = re.search(r"rounding\s*=\s*(\d+)", block)
+    return int(m.group(1)) if m else 0
+
+
+def set_rounding(px):
+    text, _ = cut_block(read(LOOKNFEEL), ROUND_START, ROUND_END)
+    if px > 0:
+        text = text.rstrip("\n") + "\n\n" + (
+            f"{ROUND_START} (managed by `notch-look round <px>|off`)\n"
+            "-- Rounded windows. Omarchy's own panels, menus, notifications, the dock and\n"
+            "-- the OSD take their corner radius from this same value.\n"
+            "hl.config({\n"
+            "  decoration = {\n"
+            f"    rounding = {px},\n"
+            "    rounding_power = 2.6,\n"
+            "  },\n"
+            "})\n"
+            f"{ROUND_END}\n"
+        )
+    write(LOOKNFEEL, text)
+    # A reload resets every option to Omarchy's defaults before applying the
+    # config, and Omarchy's shell re-reads the radius when Hyprland reloads.
+    run("hyprctl", "reload")
+    code, errors = run("hyprctl", "configerrors")
+    if errors.strip():
+        print("Hyprland config errors:\n" + errors.strip(), file=sys.stderr)
+
+
+# --------------------------------------------------------------- surfaces
+
+def surfaces_now():
+    _, block = cut_block(read(SHELL_TOML), SURF_START, SURF_END)
+    return block is not None
+
+
+def frost_now():
+    _, block = cut_block(read(LOOKNFEEL), FROST_START, FROST_END)
+    return block is not None
+
+
+def set_block(path, start, end, block, on):
+    text, _ = cut_block(read(path), start, end)
+    if on:
+        text = text.rstrip("\n") + "\n\n" + block
+    write(path, text)
+
+
+def reload_hypr():
+    run("hyprctl", "reload")
+    code, errors = run("hyprctl", "configerrors")
+    if errors.strip():
+        print("Hyprland config errors:\n" + errors.strip(), file=sys.stderr)
+
+
+def set_surfaces(on):
+    # The blur behind the frosted surfaces lives in Hyprland's config.
+    set_block(LOOKNFEEL, FROST_START, FROST_END, FROST_BLOCK, on)
+    reload_hypr()
+    text, _ = cut_block(read(SHELL_TOML), SURF_START, SURF_END)
+    if on:
+        body = read(SURFACES).rstrip("\n")
+        if not body:
+            sys.exit(f"Missing {SURFACES}; can't turn the surfaces back on.")
+        text = text.rstrip("\n") + "\n\n" + (
+            f"{SURF_START} (managed by `notch-look surfaces on|off`)\n"
+            "# Frosted pop-ups, menus and notifications in the theme's own colours, to\n"
+            "# match the notch. Keys here win over the current theme.\n"
+            f"{body}\n{SURF_END}\n"
+        )
+    write(SHELL_TOML, text.lstrip("\n"))
+
+
+# --------------------------------------------------------------- bar
+
+def bar_now():
+    bar = read_json(SHELL_JSON).get("bar", {})
+    return isinstance(bar, dict) and bar.get("id") == "mike.notch"
+
+
+def set_bar(on):
+    if on:
+        bar = read_json(SHELL_JSON).get("bar", {})
+        current = bar.get("id") if isinstance(bar, dict) else None
+        if current != "mike.notch":
+            write(PREVIOUS, json.dumps({"bar": current or ""}) + "\n")
+        target = "mike.notch"
+    else:
+        # Whichever bar was in use before, or Omarchy's own.
+        target = read_json(PREVIOUS).get("bar") or "default"
+    code, out = run("omarchy", "bar", "use", target)
+    if code != 0 and not on and target != "default":
+        code, out = run("omarchy", "bar", "use", "default")
+    if code != 0:
+        sys.exit(out.strip() or "omarchy bar use failed")
+
+
+# --------------------------------------------------------------- side strip
+
+def side_now():
+    return read_json(SIDE).get("hidden") is not True
+
+
+def set_side(on):
+    state = read_json(SIDE)
+    state["hidden"] = not on
+    # Tell the running notch, if it's up; otherwise the file is read at start.
+    code, _ = run("omarchy-shell", "mike.notch", "sideShow" if on else "sideHide")
+    if code != 0:
+        write(SIDE, json.dumps(state) + "\n")
+
+
+# --------------------------------------------------------------- Claude toasts
+
+def toasts_now():
+    return read_json(PREFS).get("claudeToasts") is not False
+
+
+def set_toasts(in_notch):
+    prefs = read_json(PREFS)
+    prefs["claudeToasts"] = bool(in_notch)
+    write(PREFS, json.dumps(prefs) + "\n")
+    # One alert, not two: the sessions widget's own notifications are the
+    # other way round.
+    run("omarchy", "bar", "set", "mike.claude-sessions", "notify", "Off" if in_notch else "Unfocused")
+
+
+# --------------------------------------------------------------- motion, bell, windows
+
+def motion_now():
+    _, block = cut_block(read(LOOKNFEEL), MOTION_START, MOTION_END)
+    return block is not None
+
+
+def set_motion(on):
+    set_block(LOOKNFEEL, MOTION_START, MOTION_END, MOTION_BLOCK, on)
+    reload_hypr()
+
+
+def bell_now():
+    _, block = cut_block(read(FOOT), BELL_START, BELL_END)
+    return block is not None
+
+
+def set_bell(on):
+    if on and not os.path.exists(FOOT) and not shutil.which("foot"):
+        print("  (the bell needs the foot terminal, which isn't installed; skipped)")
+        return
+    set_block(FOOT, BELL_START, BELL_END, BELL_BLOCK, on)
+
+
+def windows_now():
+    return read_json(PREFS).get("windowsUnderNotch") is True
+
+
+def set_windows(under):
+    prefs = read_json(PREFS)
+    prefs["windowsUnderNotch"] = bool(under)
+    write(PREFS, json.dumps(prefs) + "\n")
+
+
+# --------------------------------------------------------------- notifications, dock
+
+def plugin_enabled(plugin_id):
+    code, out = run("omarchy", "plugin", "list", "--json")
+    try:
+        for p in json.loads(out):
+            if p.get("id") == plugin_id:
+                return bool(p.get("enabled"))
+    except ValueError:
+        pass
+    return False
+
+
+# Marks a copy as notch-look's own. A copy you made yourself (with
+# `omarchy plugin clone`) has no mark, and notch-look never touches it.
+MARK = ".notch-look"
+
+
+def ours(name):
+    return os.path.exists(os.path.join(clone_dir(name), MARK))
+
+
+def clone_now(name):
+    return ours(name) and plugin_enabled(clone_id(name))
+
+
+def patch_clone(name):
+    """Copy Omarchy's current version into the clone and apply the change.
+    False if Omarchy's code moved on so the change no longer fits."""
+    spec = CLONES[name]
+    target = clone_dir(name)
+    for entry in os.listdir(spec["dir"]):
+        if entry == "manifest.json":
+            continue  # the clone's own id and name
+        src = os.path.join(spec["dir"], entry)
+        dst = os.path.join(target, entry)
+        if os.path.isdir(src):
+            shutil.rmtree(dst, ignore_errors=True)
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    changed = {}
+    for name, patches in spec["files"].items():
+        path = os.path.join(target, name)
+        text = read(path)
+        for old, new in patches:
+            if text.count(old) != 1:
+                return False
+            text = text.replace(old, new)
+        changed[path] = text
+    for path, text in changed.items():
+        write(path, text)
+    # Files of notch-look's own that the change uses.
+    for name, source in spec.get("add", {}).items():
+        shutil.copy2(source, os.path.join(target, name))
+    return True
+
+
+def install_hook():
+    hook = (
+        "#!/bin/bash\n"
+        "# Rebuilds notch-look's copies of Omarchy's notifications and dock from the\n"
+        "# version this update installed, so they keep Omarchy's fixes.\n"
+        "command -v notch-look >/dev/null && notch-look refresh || true\n"
+    )
+    write(HOOK, hook)
+    os.chmod(HOOK, 0o755)
+
+
+def set_clone(name, on, restart=True):
+    if os.path.isdir(clone_dir(name)) and not ours(name):
+        if on:
+            print(f"  ({clone_dir(name)} is your own copy of Omarchy's {name}; left as it is)")
+        return
+    if on:
+        if not os.path.isdir(clone_dir(name)):
+            code, out = run("omarchy", "plugin", "clone", CLONES[name]["source"])
+            if code != 0:
+                sys.exit(out.strip() or f"Couldn't copy Omarchy's {name}.")
+            write(os.path.join(clone_dir(name), MARK), "Made and kept up to date by notch-look.\n")
+        if not patch_clone(name):
+            run("omarchy", "plugin", "disable", clone_id(name))
+            sys.exit(f"Omarchy's {name} changed, so notch-look's change no longer fits; "
+                     "kept Omarchy's own.")
+        run("omarchy", "plugin", "enable", clone_id(name))
+        install_hook()
+    else:
+        if os.path.isdir(clone_dir(name)):
+            run("omarchy", "plugin", "disable", clone_id(name))
+        if not any(clone_now(n) for n in CLONES if n != name) and os.path.exists(HOOK):
+            os.remove(HOOK)
+    if restart:
+        # Omarchy's live reload can keep running the old code; a restart doesn't.
+        run("omarchy", "restart", "shell")
+
+
+def notifications_now():
+    return clone_now("notifications")
+
+
+def set_notifications(under_notch, restart=True):
+    set_clone("notifications", under_notch, restart)
+
+
+def refresh_clones():
+    """After an Omarchy update: rebuild the copies from the new version."""
+    changed = False
+    for name in CLONES:
+        if not clone_now(name):
+            continue
+        changed = True
+        if not patch_clone(name):
+            run("omarchy", "plugin", "disable", clone_id(name))
+            run("omarchy-notification-send", f"notch-look: Omarchy's own {name} are back",
+                f"Omarchy's update changed its {name}, so notch-look's change no longer fits.")
+    if changed:
+        run("omarchy", "restart", "shell")
+
+
+# --------------------------------------------------------------- commands
+
+def status():
+    r = rounding_now()
+    bar = bar_now()
+    later = "" if bar else "  (with the notch bar)"
+    current = read_json(SHELL_JSON).get("bar", {})
+    current = current.get("id") if isinstance(current, dict) else None
+    rows = [
+        ("bar", "notch" if bar else (current or "Omarchy's own")),
+        ("side", ("on" if side_now() else "off") + later),
+        ("round", f"{r}px" if r else "off (square)"),
+        ("surfaces", "frosted" if surfaces_now() else "theme's own"),
+        ("claude-toasts", "in the notch" if toasts_now() else "desktop notifications"),
+        ("notifications", "under the notch" if notifications_now() else "top-right corner"),
+        ("windows", ("full screen, under the notch" if windows_now() else "below the notch's strip") + later),
+        ("motion", "smooth" if motion_now() else "Omarchy's own"),
+        ("bell", "flags the window" if bell_now() else "off"),
+        ("dock", "frosted" if clone_now("dock") else "Omarchy's own"),
+    ]
+    for name, value in rows:
+        print(f"  {name:<14} {value}")
+
+
+def on_off(value):
+    if value in ("on", "yes", "true", "1"):
+        return True
+    if value in ("off", "no", "false", "0"):
+        return False
+    sys.exit(f"Expected on or off, got {value!r}")
+
+
+def main(argv):
+    if not argv:
+        status()
+        return 0
+    cmd = argv[0]
+    arg = argv[1] if len(argv) > 1 else ""
+    if cmd in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0
+    if cmd == "off":
+        set_notifications(False, restart=False)
+        set_clone("dock", False, restart=False)
+        set_bar(False)
+        set_rounding(0)
+        set_surfaces(False)
+        set_motion(False)
+        set_bell(False)
+        set_toasts(False)
+        run("omarchy", "restart", "shell")
+        print("Back to stock Omarchy. `notch-look on` brings it all back.")
+    elif cmd == "on":
+        set_rounding(DEFAULT_ROUND)
+        set_surfaces(True)
+        set_motion(True)
+        set_bell(True)
+        set_toasts(True)
+        set_bar(True)
+        set_side(True)
+        set_clone("dock", True, restart=False)
+        set_notifications(True)
+        print("Notch look on.")
+    elif cmd == "bar":
+        set_bar(on_off(arg))
+    elif cmd == "side":
+        set_side(on_off(arg))
+    elif cmd == "round":
+        if arg in ("off", "0", "none"):
+            set_rounding(0)
+        elif arg.isdigit():
+            set_rounding(min(40, int(arg)))
+        else:
+            sys.exit("Usage: notch-look round <px>|off   (14 is the notch look)")
+    elif cmd == "surfaces":
+        set_surfaces(on_off(arg))
+    elif cmd == "windows":
+        if arg not in ("under", "below"):
+            sys.exit("Usage: notch-look windows under|below")
+        set_windows(arg == "under")
+    elif cmd == "motion":
+        set_motion(on_off(arg))
+    elif cmd == "bell":
+        set_bell(on_off(arg))
+    elif cmd == "refresh":
+        refresh_clones()
+        return 0
+    elif cmd == "dock":
+        if arg not in ("frosted", "plain"):
+            sys.exit("Usage: notch-look dock frosted|plain")
+        set_clone("dock", arg == "frosted")
+    elif cmd == "notifications":
+        if arg == "refresh":
+            refresh_clones()
+            return 0
+        if arg not in ("notch", "corner"):
+            sys.exit("Usage: notch-look notifications notch|corner")
+        set_notifications(arg == "notch")
+    elif cmd in ("claude-toasts", "toasts"):
+        if arg not in ("notch", "desktop"):
+            sys.exit("Usage: notch-look claude-toasts notch|desktop")
+        set_toasts(arg == "notch")
+    else:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    status()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

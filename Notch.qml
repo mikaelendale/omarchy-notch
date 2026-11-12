@@ -1,0 +1,472 @@
+import QtQuick
+import "Palette.js" as P
+
+// The top notch: one black slab at the top centre of the screen.
+//
+// Closed, it shows Claude's mark and the time, plus what's playing; it grows
+// wider for what's live (Claude waiting on you, music) the way a phone's
+// island does. Hovered, it opens downward into the full bar: the Omarchy menu,
+// the clock, and one fixed-width, scrollable row of round buttons (tray apps
+// and Omarchy's own widgets, lent by the bar plugin through traySlot and
+// statusSlot), with cards for music, today and Claude below.
+//
+// Pure QtQuick, no Quickshell: the bar plugin feeds it data, and the tests
+// render it off screen with made-up data.
+Item {
+  id: root
+
+  // ---- inputs
+  property bool forceOpen: false      // tests, and `omarchy-shell mike.notch toggle`
+  property bool hold: false           // a panel or tray menu is open: stay open
+  property real motion: 1             // 0 when Omarchy's animations are off
+  property date now: new Date()
+  property string clockFormat: "h:mm AP"
+  property var media: ({ available: false })
+  property var claude: ({ sessions: [], counts: ({}) })
+  // Wi-Fi and battery for the closed notch: { wifi: { kind, strength,
+  // connected }, battery: { present, level, charging } }.
+  property var status: ({})
+  // A Claude session waiting on you: { title, detail, session }, or null. The
+  // notch grows into a toast for it, like a phone's incoming-call island.
+  property var alert: null
+
+  // Where the bar plugin puts the menu, tray apps and Omarchy's widgets.
+  readonly property alias menuSlot: menuSlotItem
+  readonly property alias traySlot: traySlotItem
+  readonly property alias statusSlot: statusSlotItem
+
+  signal mediaRequested(string action)
+  signal sessionRequested(var session)
+  signal conversationsRequested()
+  signal alertDismissed()
+
+  // ---- geometry
+  readonly property real collapsedHeight: 34
+  readonly property real flare: 12
+  readonly property real expandedWidth: 840
+  readonly property real expandedHeight: 222
+  readonly property real stripWidth: 352
+
+  property bool hoverOpen: false
+  readonly property bool alertActive: !!alert
+  // While a toast shows, hovering doesn't open the bar, so its button can be clicked.
+  readonly property bool open: forceOpen || hold || (hoverOpen && !alertActive)
+  readonly property bool hovered: hover.hovered
+
+  // In full-screen mode windows run under the notch, so while nothing's going
+  // on it's see-through and whatever is beneath shows; it turns solid the
+  // moment it's hovered or opened, shows a toast or a notification, or an
+  // agent needs you.
+  property bool notificationsShowing: false
+  // Only in full-screen mode, where windows run under it, does it fade when
+  // idle; with a strip of its own it stays solid glass.
+  property bool seeThroughWhenIdle: true
+  property real idleOpacity: 0.42
+  readonly property bool active: hovered || open || alertActive || needsCount > 0 || notificationsShowing
+  opacity: active || !seeThroughWhenIdle ? 1 : idleOpacity
+  Behavior on opacity { NumberAnimation { duration: (root.active ? 110 : 240) * root.motion; easing.type: Easing.OutCubic } }
+
+  // One number drives the whole morph, 0 closed to 1 open, so the slab's size,
+  // its corners and the two layers of content can never drift apart.
+  property real progress: open ? 1 : 0
+  // iOS-style: a stiff, critically damped spring: most of the way in about a
+  // tenth of a second, settled in a quarter, no bounce.
+  Behavior on progress { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+
+  // The closed width follows what's live, easing as an activity comes or goes.
+  readonly property real collapsedTarget: Math.max(132, collapsedRow.implicitWidth + 36)
+  property real collapsedWidth: collapsedTarget
+  Behavior on collapsedWidth { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+
+  function mix(a, b, t) { return a + (b - a) * t }
+  function clamp01(v) { return Math.max(0, Math.min(1, v)) }
+
+  // The toast's own 0..1, blended in before the open bar's.
+  readonly property real alertWidth: 440
+  readonly property real alertHeight: 74
+  property real alertProgress: alertActive ? 1 : 0
+  Behavior on alertProgress { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+
+  readonly property real baseW: mix(collapsedWidth, alertWidth, alertProgress)
+  readonly property real baseH: mix(collapsedHeight, alertHeight, alertProgress)
+  readonly property real baseR: mix(collapsedHeight / 2, 30, alertProgress)
+  readonly property real bodyW: mix(baseW, expandedWidth, progress)
+  readonly property real bodyH: mix(baseH, expandedHeight, progress)
+  readonly property real bodyR: mix(baseR, 30, progress)
+  // Closed content is gone by a quarter of the way; open content arrives in
+  // the last stretch, so no two layers ever show at once.
+  readonly property real closedOpacity: clamp01(1 - Math.max(progress, alertProgress) / 0.25)
+  readonly property real alertOpacity: clamp01((alertProgress - 0.55) / 0.45) * clamp01(1 - progress / 0.25)
+  readonly property real openOpacity: clamp01((progress - 0.5) / 0.4)
+
+  // The item is as big as the open notch so the slab can grow inside it
+  // without the window resizing; only the slab takes the pointer (hitArea).
+  implicitWidth: expandedWidth + 2 * flare
+  implicitHeight: expandedHeight
+  readonly property alias hitArea: hit
+
+  // ---- live activity, closed
+  readonly property var counts: claude && claude.counts ? claude.counts : ({})
+  readonly property int needsCount: (counts.needs || 0)
+  readonly property int workingCount: (counts.working || 0) + (counts.watching || 0)
+  // Every coding agent's sessions (Claude, Codex, OpenCode...). The closed
+  // notch shows the one that matters most: one waiting on you, else one at
+  // work, else your default agent.
+  property string defaultAgent: "claude"
+  readonly property var sessionList: claude && claude.sessions ? claude.sessions : []
+  readonly property var lead: {
+    var list = sessionList
+    for (var i = 0; i < list.length; i++) if (list[i].state === "needs") return list[i]
+    for (var j = 0; j < list.length; j++) if (list[j].state === "working" || list[j].state === "watching") return list[j]
+    return { agent: defaultAgent, state: "idle" }
+  }
+  readonly property bool playing: !!(media && media.available && media.playing)
+
+  // ---- hover: a short dwell to open, a short grace to close
+  Timer {
+    id: openTimer
+    interval: 50
+    onTriggered: root.hoverOpen = true
+  }
+  Timer {
+    id: closeTimer
+    interval: 180
+    onTriggered: if (!hover.hovered) root.hoverOpen = false
+  }
+  // A panel or menu just closed (clicking its button again, Esc...). While it
+  // was up its window covered the notch, so hover can't be trusted yet: stay
+  // open and only close if the pointer isn't back on the notch shortly.
+  onHoldChanged: if (!hold) { openTimer.stop(); closeTimer.stop(); hoverOpen = true; releaseTimer.restart() }
+  Timer {
+    id: releaseTimer
+    interval: 650
+    onTriggered: if (!hover.hovered) root.hoverOpen = false
+  }
+  onHoveredChanged: {
+    if (hovered) { closeTimer.stop(); releaseTimer.stop(); openTimer.restart() }
+    else { openTimer.stop(); closeTimer.restart() }
+  }
+
+  NotchShape {
+    id: shape
+    anchors.horizontalCenter: parent.horizontalCenter
+    bodyWidth: root.bodyW
+    bodyHeight: root.bodyH
+    radius: root.bodyR
+    flare: root.flare
+    color: Theme.body
+  }
+
+  Item {
+    id: hit
+    anchors.horizontalCenter: parent.horizontalCenter
+    width: root.bodyW
+    height: root.bodyH
+    clip: true
+
+    HoverHandler { id: hover }
+    TapHandler {
+      enabled: !root.open && !root.alertActive
+      onTapped: { closeTimer.stop(); root.hoverOpen = true }
+    }
+
+    // ---------------------------------------------------------- closed
+    Row {
+      id: collapsedRow
+      anchors.horizontalCenter: parent.horizontalCenter
+      y: (root.collapsedHeight - height) / 2
+      height: 22
+      spacing: 10
+      opacity: root.closedOpacity
+      visible: opacity > 0
+
+      // Claude: its mark, cycling colours while a session works, yellow (with
+      // "needs you") while one waits on you.
+      Row {
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 7
+        AgentMark {
+          anchors.verticalCenter: parent.verticalCenter
+          size: 18
+          agent: root.lead.agent || "claude"
+          working: root.lead.state === "working" || root.lead.state === "watching"
+          needs: root.lead.state === "needs"
+          motion: root.motion
+        }
+        Text {
+          visible: root.needsCount > 0
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.needsCount === 1 ? "needs you" : root.needsCount + " need you"
+          textFormat: Text.PlainText
+          color: Theme.yellow
+          font.family: P.sans
+          font.pixelSize: 12
+          font.weight: Font.DemiBold
+        }
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: Qt.formatTime(root.now, root.clockFormat)
+        textFormat: Text.PlainText
+        color: Theme.text
+        font.family: P.sans
+        font.pixelSize: 13
+        font.weight: Font.DemiBold
+        font.features: { "tnum": 1 }
+      }
+
+      // The music, while it plays: its cover and moving bars.
+      Item {
+        width: root.playing ? playingRow.implicitWidth : 0
+        height: parent.height
+        visible: width > 0
+        clip: true
+        Behavior on width { NumberAnimation { duration: 180 * root.motion; easing.type: Easing.BezierSpline; easing.bezierCurve: P.ease } }
+        Row {
+          id: playingRow
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: 8
+          CoverArt {
+            anchors.verticalCenter: parent.verticalCenter
+            size: 18
+            radius: 5
+            source: root.media && root.media.artUrl ? root.media.artUrl : ""
+          }
+          EqBars {
+            anchors.verticalCenter: parent.verticalCenter
+            playing: root.playing
+            motion: root.motion
+            color: Theme.green
+          }
+        }
+      }
+
+      // Wi-Fi (or wired) and the battery, like a phone's status bar.
+      Item {
+        readonly property var wifi: root.status && root.status.wifi ? root.status.wifi : ({ kind: "none" })
+        width: wifi.kind === "ethernet" ? wiredGlyph.implicitWidth : wifiIcon.width
+        height: parent.height
+        WifiIcon {
+          id: wifiIcon
+          visible: parent.wifi.kind !== "ethernet"
+          anchors.verticalCenter: parent.verticalCenter
+          size: 15
+          connected: parent.wifi.kind === "wifi"
+          strength: parent.wifi.strength || 0
+        }
+        Text {
+          id: wiredGlyph
+          visible: parent.wifi.kind === "ethernet"
+          anchors.verticalCenter: parent.verticalCenter
+          text: String.fromCodePoint(0xF0200)
+          textFormat: Text.PlainText
+          color: Theme.text
+          font.family: P.glyphs
+          font.pixelSize: 14
+        }
+      }
+      BatteryIcon {
+        readonly property var battery: root.status && root.status.battery ? root.status.battery : ({ present: false })
+        visible: !!battery.present
+        anchors.verticalCenter: parent.verticalCenter
+        size: 25
+        level: battery.level || 0
+        charging: !!battery.charging
+      }
+    }
+
+    // ----------------------------------------------------------- toast
+    Item {
+      id: toast
+      anchors.horizontalCenter: parent.horizontalCenter
+      width: root.alertWidth
+      height: root.alertHeight
+      opacity: root.alertOpacity
+      visible: opacity > 0
+      enabled: root.alertActive && !root.open
+
+      AgentMark {
+        x: 22
+        anchors.verticalCenter: parent.verticalCenter
+        size: 30
+        agent: root.alert && root.alert.session && root.alert.session.agent ? root.alert.session.agent : "claude"
+        needs: true
+        motion: root.motion
+      }
+      Column {
+        x: 66
+        anchors.verticalCenter: parent.verticalCenter
+        width: parent.width - 66 - openButton.width - 34
+        spacing: 2
+        Text {
+          width: parent.width
+          text: root.alert ? (root.alert.title || "Claude needs you") : ""
+          textFormat: Text.PlainText
+          elide: Text.ElideRight
+          color: Theme.text
+          font.family: P.sans
+          font.pixelSize: 14
+          font.weight: Font.DemiBold
+        }
+        Text {
+          width: parent.width
+          text: root.alert ? (root.alert.detail || "") : ""
+          textFormat: Text.PlainText
+          elide: Text.ElideRight
+          color: Theme.secondary
+          font.family: P.sans
+          font.pixelSize: 12
+        }
+      }
+      Rectangle {
+        id: openButton
+        anchors.right: parent.right
+        anchors.rightMargin: 18
+        anchors.verticalCenter: parent.verticalCenter
+        width: 74
+        height: 34
+        radius: 17
+        color: Theme.text
+        opacity: openHover.hovered ? 1 : 0.9
+        scale: openTap.pressed ? 0.95 : 1
+        Behavior on scale { NumberAnimation { duration: 80 } }
+        Text {
+          anchors.centerIn: parent
+          text: "Open"
+          textFormat: Text.PlainText
+          color: Theme.onText
+          font.family: P.sans
+          font.pixelSize: 13
+          font.weight: Font.DemiBold
+        }
+        HoverHandler { id: openHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler {
+          id: openTap
+          onTapped: {
+            if (root.alert && root.alert.session) root.sessionRequested(root.alert.session)
+            root.alertDismissed()
+          }
+        }
+      }
+    }
+
+    // ------------------------------------------------------------ open
+    Item {
+      id: expanded
+      anchors.horizontalCenter: parent.horizontalCenter
+      width: root.expandedWidth
+      height: root.expandedHeight
+      // The content grows with the slab rather than being uncovered by it, so
+      // nothing is ever cut off at the edges mid-morph.
+      opacity: root.openOpacity
+      scale: root.bodyW / root.expandedWidth
+      transformOrigin: Item.Top
+      visible: opacity > 0
+      enabled: root.open
+
+      // Top row: the menu, the clock, and the scrollable row of buttons.
+      Item {
+        id: topRow
+        x: 18
+        width: parent.width - 36
+        height: 44
+
+        Row {
+          id: menuSlotItem
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: 6
+        }
+
+        Text {
+          id: clockLabel
+          anchors.centerIn: parent
+          text: Qt.formatTime(root.now, root.clockFormat)
+          textFormat: Text.PlainText
+          color: Theme.text
+          font.family: P.sans
+          font.pixelSize: 14
+          font.weight: Font.DemiBold
+          font.features: { "tnum": 1 }
+        }
+
+        // A fixed width: what doesn't fit scrolls (wheel or drag), nothing
+        // hides in a drawer. It simply clips at its ends; a painted fade would
+        // tint the frost behind it.
+        Item {
+          id: strip
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: Math.min(root.stripWidth, stripRow.implicitWidth)
+          height: 34
+          clip: true
+
+          Flickable {
+            id: stripFlick
+            anchors.fill: parent
+            contentWidth: stripRow.implicitWidth
+            contentHeight: height
+            flickableDirection: Flickable.HorizontalFlick
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentWidth > width
+
+            Row {
+              id: stripRow
+              height: stripFlick.height
+              spacing: 6
+              Row {
+                id: statusSlotItem
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+              }
+              Row {
+                id: traySlotItem
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+              }
+            }
+          }
+          WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: function(event) {
+              var delta = event.angleDelta.x !== 0 ? event.angleDelta.x : event.angleDelta.y
+              var max = Math.max(0, stripFlick.contentWidth - stripFlick.width)
+              stripFlick.contentX = Math.max(0, Math.min(max, stripFlick.contentX - delta * 0.6))
+            }
+          }
+        }
+      }
+
+      // Cards.
+      Row {
+        x: 14
+        y: topRow.height + 4
+        spacing: 10
+        readonly property real cardHeight: root.expandedHeight - y - 14
+
+        MediaCard {
+          width: 330
+          height: parent.cardHeight
+          media: root.media
+          motion: root.motion
+          onRequested: function(action) { root.mediaRequested(action) }
+        }
+        TodayCard {
+          width: 190
+          height: parent.cardHeight
+          now: root.now
+        }
+        ClaudeCard {
+          defaultAgent: root.defaultAgent
+          width: root.expandedWidth - 28 - 330 - 190 - 20
+          height: parent.cardHeight
+          claude: root.claude
+          motion: root.motion
+          onSessionRequested: function(session) { root.sessionRequested(session) }
+          onConversationsRequested: root.conversationsRequested()
+        }
+      }
+    }
+  }
+}

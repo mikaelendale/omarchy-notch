@@ -1,0 +1,792 @@
+#!/usr/bin/env python3
+"""Claude Code conversations: continue one, or start a new session.
+
+Super+Shift+C opens this in a floating terminal. It lists every conversation
+in every Claude config home, newest first, with the sessions that are open
+right now on top. Enter on a past conversation resumes it in its own terminal
+window; Enter on an open one jumps to its window; the first row starts a new
+session after you pick a folder.
+
+Reads Claude Code's own files: ~/.claude/projects/*/*.jsonl (transcripts) and
+~/.claude/sessions/<pid>.json (running sessions). Neither is a documented API.
+"""
+
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import textwrap
+import time
+
+HOME = os.path.expanduser("~")
+AGENT_APP_ID = "org.omarchy.agent"  # same class as `omarchy agent` windows
+CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "claude-conversations")
+CACHE_FILE = os.path.join(CACHE_DIR, "index.json")
+CACHE_VERSION = 2
+SELF = os.path.realpath(__file__)
+
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]+$")
+NOISE_PREFIXES = (
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+    "<local-command",
+    "<system-reminder>",
+    "<bash-input>",
+    "<bash-stdout>",
+    "<bash-stderr>",
+    "<user-memory-input>",
+    "<task-notification>",
+    "Caveat:",
+    "[Request interrupted",
+)
+
+# ANSI, using the terminal palette so the Omarchy theme carries through.
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+ACCENT = "\033[33m"  # yellow slot: Claude-ish warm accent in most themes
+ALERT = "\033[31m"
+SOFT = "\033[90m"
+
+
+# --------------------------------------------------------------------------
+# Where Claude keeps things
+
+
+def config_homes():
+    """~/.claude, CLAUDE_CONFIG_DIR, and any extra Omarchy agent accounts."""
+    homes = [os.path.join(HOME, ".claude")]
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        homes.append(os.environ["CLAUDE_CONFIG_DIR"])
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state")
+    registry = os.path.join(state, "omarchy", "agents", "accounts", "claude.json")
+    try:
+        with open(registry, encoding="utf-8") as handle:
+            homes.extend(_find_homes(json.load(handle)))
+    except (OSError, ValueError):
+        pass
+    seen = []
+    for home in homes:
+        if isinstance(home, str) and os.path.isabs(home):
+            home = os.path.normpath(home)
+            if home not in seen and os.path.isdir(home):
+                seen.append(home)
+    return seen
+
+
+def _find_homes(data, depth=0):
+    if depth > 6:
+        return []
+    found = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key == "home" and isinstance(value, str):
+                found.append(value)
+            else:
+                found.extend(_find_homes(value, depth + 1))
+    elif isinstance(data, list):
+        for value in data[:64]:
+            found.extend(_find_homes(value, depth + 1))
+    return found
+
+
+def transcript_paths(home):
+    root = os.path.join(home, "projects")
+    try:
+        projects = os.listdir(root)
+    except OSError:
+        return
+    for project in projects:
+        folder = os.path.join(root, project)
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for name in names:
+            if name.endswith(".jsonl") and UUID_RE.match(name[:-6]):
+                yield name[:-6], os.path.join(folder, name)
+
+
+def find_transcript(home, session_id):
+    for sid, path in transcript_paths(home):
+        if sid == session_id:
+            return path
+    return None
+
+
+# --------------------------------------------------------------------------
+# Reading transcripts
+
+
+def prompt_text(record):
+    """The words a person typed, or None for tool results, commands and meta."""
+    if record.get("type") != "user" or record.get("isMeta") or record.get("isSidechain"):
+        return None
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+        if not parts:
+            return None
+        text = "\n".join(parts)
+    else:
+        return None
+    text = text.strip()
+    if not text or text.startswith(NOISE_PREFIXES):
+        return None
+    return text
+
+
+def reply_text(record):
+    if record.get("type") != "assistant" or record.get("isSidechain"):
+        return None
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if not isinstance(content, list):
+        return None
+    parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+    text = "\n".join(p for p in parts if p).strip()
+    return text or None
+
+
+def one_line(text, limit=120):
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def summarize(path):
+    """Title, folder and prompt count for one transcript."""
+    info = {"cwd": None, "custom": None, "ai": None, "name": None, "first": None, "last": None, "prompts": 0, "sdk": False}
+    markers = (b'"type":"user"', b'"type":"ai-title"', b'"type":"custom-title"', b'"type":"agent-name"', b'"type":"last-prompt"')
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        return None
+    with handle:
+        for raw in handle:
+            if not any(m in raw for m in markers):
+                continue
+            try:
+                record = json.loads(raw)
+            except ValueError:
+                continue
+            kind = record.get("type")
+            if kind == "user":
+                if info["cwd"] is None and isinstance(record.get("cwd"), str):
+                    info["cwd"] = record["cwd"]
+                entry = record.get("entrypoint")
+                if isinstance(entry, str) and entry.startswith("sdk"):
+                    info["sdk"] = True
+                text = prompt_text(record)
+                if text:
+                    info["prompts"] += 1
+                    if info["first"] is None:
+                        info["first"] = one_line(text)
+                    info["last"] = one_line(text)
+            elif kind == "ai-title" and isinstance(record.get("aiTitle"), str):
+                info["ai"] = record["aiTitle"].strip() or info["ai"]
+            elif kind == "custom-title" and isinstance(record.get("customTitle"), str):
+                info["custom"] = record["customTitle"].strip() or info["custom"]
+            elif kind == "agent-name" and isinstance(record.get("agentName"), str):
+                info["name"] = record["agentName"].strip() or info["name"]
+            elif kind == "last-prompt" and isinstance(record.get("lastPrompt"), str):
+                info["last"] = one_line(record["lastPrompt"]) or info["last"]
+    return info
+
+
+def cached_summary(path):
+    entry = load_cache().get(path)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    if entry and entry.get("stamp") == [stat.st_mtime, stat.st_size]:
+        return entry["info"]
+    return summarize(path)
+
+
+def title_of(info):
+    if not info:
+        return None
+    return info.get("custom") or info.get("ai") or info.get("name") or info.get("first")
+
+
+def load_cache():
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+        if data.get("version") == CACHE_VERSION and isinstance(data.get("files"), dict):
+            return data["files"]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {}
+
+
+def save_cache(files):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump({"version": CACHE_VERSION, "files": files}, handle)
+        os.replace(tmp, CACHE_FILE)
+    except OSError:
+        pass
+
+
+def conversations():
+    """Every resumable conversation, newest first."""
+    cache = load_cache()
+    fresh = {}
+    found = []
+    for home in config_homes():
+        for sid, path in transcript_paths(home):
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            stamp = [stat.st_mtime, stat.st_size]
+            cached = cache.get(path)
+            if cached and cached.get("stamp") == stamp:
+                info = cached["info"]
+            else:
+                info = summarize(path)
+                if info is None:
+                    continue
+            fresh[path] = {"stamp": stamp, "info": info}
+            if info["prompts"] == 0 or info["sdk"]:
+                continue
+            found.append({"id": sid, "home": home, "path": path, "mtime": stat.st_mtime, "info": info})
+    save_cache(fresh)
+    found.sort(key=lambda c: c["mtime"], reverse=True)
+    return found
+
+
+# --------------------------------------------------------------------------
+# Running sessions and their windows
+
+
+def proc_stat(pid):
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as handle:
+            raw = handle.read(4096).decode("utf-8", "replace")
+    except OSError:
+        return None
+    end = raw.rfind(")")
+    return raw[end + 1 :].split() if end >= 0 else None
+
+
+def hypr_windows():
+    try:
+        out = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=3).stdout
+        clients = json.loads(out)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    windows = {}
+    for client in clients if isinstance(clients, list) else []:
+        pid, address = client.get("pid"), client.get("address")
+        if isinstance(pid, int) and isinstance(address, str) and ADDRESS_RE.match(address):
+            windows[pid] = address
+    return windows
+
+
+def window_for(pid, windows):
+    current = pid
+    for _ in range(8):
+        if current in windows:
+            return windows[current]
+        fields = proc_stat(current)
+        try:
+            parent = int(fields[1]) if fields else 0
+        except ValueError:
+            parent = 0
+        if parent <= 1 or parent == current:
+            return None
+        current = parent
+    return None
+
+
+STATUS_WORDS = {"busy": "working", "shell": "working", "waiting": "needs you", "idle": "open"}
+
+
+def live_sessions():
+    """sessionId -> {status, window, kind, name, cwd, home} for running sessions."""
+    windows = hypr_windows()
+    live = {}
+    for home in config_homes():
+        folder = os.path.join(home, "sessions")
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for name in names:
+            if not re.match(r"^\d+\.json$", name):
+                continue
+            pid = int(name[:-5])
+            try:
+                with open(os.path.join(folder, name), encoding="utf-8") as handle:
+                    record = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            sid = record.get("sessionId")
+            if not isinstance(sid, str) or not UUID_RE.match(sid):
+                continue
+            fields = proc_stat(pid)
+            if not fields or len(fields) < 20:
+                continue
+            expected = record.get("procStart")
+            if isinstance(expected, str) and expected and expected != fields[19]:
+                continue  # pid reused by another process
+            live[sid] = {
+                "pid": pid,
+                "status": STATUS_WORDS.get(record.get("status"), "open"),
+                "window": window_for(pid, windows) or "",
+                "kind": record.get("kind") or "",
+                "name": record.get("name") or "",
+                "cwd": record.get("cwd") or "",
+                "home": home,
+                "updated": (record.get("updatedAt") or 0) / 1000,
+            }
+    return live
+
+
+# --------------------------------------------------------------------------
+# Launching
+
+
+def account_env(home):
+    """Run Claude as the account that owns `home`, the way `omarchy agent` does."""
+    default = os.path.join(HOME, ".claude")
+    env = ["env", "-u", "CLAUDE_CONFIG_DIR"]
+    if home and os.path.normpath(home) != default:
+        env += ["OMARCHY_AGENT_CLAUDE_HOME=" + home, "CLAUDE_CONFIG_DIR=" + home]
+    else:
+        env += ["OMARCHY_AGENT_CLAUDE_HOME="]
+    return env
+
+
+def selected_home():
+    try:
+        out = subprocess.run(["omarchy-agent-account-home", "claude"], capture_output=True, text=True, timeout=5)
+        home = out.stdout.strip()
+        return home if out.returncode == 0 and os.path.isabs(home) else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def open_terminal(cwd, command):
+    """A new tiled agent window running `command` in `cwd`."""
+    args = ["uwsm-app", "--", "xdg-terminal-exec", "--app-id=" + AGENT_APP_ID, "--dir=" + cwd, "-e"] + command
+    subprocess.Popen(
+        ["setsid"] + args,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    time.sleep(0.3)  # let uwsm-app hand off before this window closes
+
+
+def focus(address):
+    subprocess.run(
+        ["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:%s" })' % address],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def notify(summary, body=""):
+    try:
+        subprocess.Popen(["notify-send", "-a", "Claude", summary, body], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+def resume(session_id, home, cwd):
+    if not cwd or not os.path.isdir(cwd):
+        notify("Can't continue this conversation", "Its folder is gone: %s" % (cwd or "unknown"))
+        return False
+    open_terminal(cwd, account_env(home) + ["claude", "--permission-mode", "auto", "--resume", session_id])
+    return True
+
+
+def start_new(cwd):
+    open_terminal(cwd, account_env(selected_home()) + ["claude", "--permission-mode", "auto"])
+
+
+# --------------------------------------------------------------------------
+# Display helpers
+
+
+def tilde(path):
+    if not path:
+        return ""
+    if path == HOME:
+        return "~"
+    if path.startswith(HOME + os.sep):
+        return "~" + path[len(HOME) :]
+    return path
+
+
+def ago(stamp, now=None):
+    now = now or time.time()
+    delta = max(0, now - stamp)
+    if delta < 60:
+        return "now"
+    if delta < 3600:
+        return "%dm ago" % (delta // 60)
+    if delta < 86400:
+        return "%dh ago" % (delta // 3600)
+    days = int(delta // 86400)
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return "%dd ago" % days
+    return time.strftime("%b %-d", time.localtime(stamp))
+
+
+def clip(text, width):
+    text = text or ""
+    if width <= 1:
+        return ""
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def fzf_base(width_hint=None):
+    return [
+        "fzf",
+        "--ansi",
+        "--no-sort",
+        "--layout=reverse",
+        "--no-scrollbar",
+        "--info=hidden",
+        "--delimiter=\t",
+        "--with-nth=1",
+        "--prompt=  ",
+        "--pointer=▌",
+        "--gutter= ",
+        "--no-separator",
+        "--padding=1,2",
+        "--color=fg:-1,bg:-1,hl:3,fg+:-1:bold,bg+:-1,hl+:3:bold,pointer:3,prompt:3,header:8,info:8,border:8,gutter:-1,query:-1:bold,preview-border:8,separator:8",
+    ]
+
+
+def run_fzf(args, rows, expect=False):
+    """(key, fields, query). key is None after Esc; fields is None when nothing was chosen."""
+    try:
+        proc = subprocess.run(args, input="\n".join(rows), stdout=subprocess.PIPE, text=True)
+    except FileNotFoundError:
+        print("fzf is not installed: omarchy pkg add fzf", file=sys.stderr)
+        sys.exit(1)
+    if proc.returncode not in (0, 1):
+        return None, None, ""
+    lines = proc.stdout.rstrip("\n").split("\n")
+    query = lines.pop(0) if lines else ""
+    key = (lines.pop(0) if lines else "") if expect else ""
+    chosen = lines[0] if lines else ""
+    return key, (chosen.split("\t") if chosen else None), query
+
+
+# --------------------------------------------------------------------------
+# Screens
+
+
+def conversation_rows(convos, live, width):
+    rows = []
+    rows.append("\t".join([ACCENT + "+" + RESET + "  " + BOLD + "New session" + RESET, "new", "", "", ""]))
+
+    by_id = {c["id"]: c for c in convos}
+    when_w = 10
+    folder_w = min(28, max(12, width // 4))
+    title_w = max(16, width - when_w - folder_w - 9)
+
+    def row(sid, home, cwd, title, when, mark, status_color):
+        line = "%s  %s%s%s  %s  %s%s%s" % (
+            mark,
+            status_color,
+            when.ljust(when_w),
+            RESET,
+            clip(title, title_w).ljust(title_w),
+            SOFT,
+            clip(tilde(cwd), folder_w),
+            RESET,
+        )
+        return "\t".join([line, "convo", sid, home, cwd])
+
+    open_ids = sorted(live, key=lambda s: live[s]["updated"], reverse=True)
+    for sid in open_ids:
+        session = live[sid]
+        convo = by_id.get(sid)
+        title = title_of(convo["info"]) if convo else None
+        title = title or session["name"] or "New conversation"
+        cwd = (convo["info"].get("cwd") if convo else None) or session["cwd"]
+        color = ALERT if session["status"] == "needs you" else ACCENT
+        rows.append(row(sid, session["home"], cwd, title, session["status"], ACCENT + "●" + RESET, color))
+
+    for convo in convos:
+        if convo["id"] in live:
+            continue
+        info = convo["info"]
+        rows.append(row(convo["id"], convo["home"], info.get("cwd") or "", title_of(info) or "Untitled", ago(convo["mtime"]), " ", SOFT))
+    return rows
+
+
+def pick_conversation():
+    convos = conversations()
+    live = live_sessions()
+    cols = shutil.get_terminal_size((140, 40)).columns
+    list_cols = int(cols * 0.55) - 6
+    rows = conversation_rows(convos, live, list_cols)
+    preview = "%s --preview {3} {4} {5}" % shlex.quote(SELF)
+    args = fzf_base() + [
+        "--print-query",
+        "--expect=ctrl-n",
+        "--ghost=Search conversations",
+        "--header=enter  open      ctrl-n  new session in this folder      esc  close",
+        "--header-first",
+        "--preview=" + preview,
+        "--preview-window=right,45%,wrap,follow,border-left,~2",
+    ]
+    key, fields, _ = run_fzf(args, rows, expect=True)
+    if key is None:
+        return "quit", None
+    if fields is None:
+        return "again", None
+    kind = fields[1] if len(fields) > 1 else ""
+    sid = fields[2] if len(fields) > 2 else ""
+    home = fields[3] if len(fields) > 3 else ""
+    cwd = fields[4] if len(fields) > 4 else ""
+    if kind == "new":
+        return "new", None
+    if key == "ctrl-n":
+        return "new-here", cwd
+    session = live.get(sid)
+    if session:
+        if session["window"]:
+            focus(session["window"])
+            return "done", None
+        if session["kind"] == "background" or session["kind"] == "bg":
+            open_terminal(cwd or HOME, account_env(home) + ["claude", "attach", sid])
+            return "done", None
+        notify("That conversation is already open", "It's running in a terminal Hyprland can't see (pid %d)." % session["pid"])
+        return "done", None
+    return ("done", None) if resume(sid, home, cwd) else ("again", None)
+
+
+def folder_choices(convos):
+    seen, out = set(), []
+
+    def add(path):
+        if path and os.path.isdir(path) and path not in seen:
+            seen.add(path)
+            out.append(path)
+
+    add(os.path.join(HOME, "Work"))
+    for convo in convos:
+        cwd = convo["info"].get("cwd")
+        if cwd != HOME:
+            add(cwd)
+    projects = os.path.join(HOME, "Projects")
+    try:
+        entries = [os.path.join(projects, n) for n in os.listdir(projects) if not n.startswith(".")]
+        entries = [p for p in entries if os.path.isdir(p)]
+        entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for path in entries:
+            add(path)
+    except OSError:
+        pass
+    return out
+
+
+def pick_folder():
+    convos = conversations()
+    rows = []
+    for path in folder_choices(convos):
+        rows.append("\t".join(["   " + tilde(path), path]))
+    preview = "%s --folder-preview {2}" % shlex.quote(SELF)
+    args = fzf_base() + [
+        "--print-query",
+        "--bind=enter:accept-or-print-query",
+        "--ghost=Search folders, or type a path",
+        "--header=enter  start the new session here      esc  back",
+        "--header-first",
+        "--preview=" + preview,
+        "--preview-window=right,45%,wrap,border-left",
+    ]
+    key, fields, query = run_fzf(args, rows)
+    if key is None:
+        return None
+    if fields and len(fields) > 1:
+        return fields[1]
+    typed = os.path.expanduser(query.strip()) if query else ""
+    if typed and not os.path.isabs(typed):
+        typed = os.path.join(HOME, typed)
+    if typed and os.path.isdir(typed):
+        return os.path.normpath(typed)
+    if typed:
+        notify("No such folder", tilde(typed))
+    return ""
+
+
+# --------------------------------------------------------------------------
+# Previews (run by fzf)
+
+
+def wrap_block(text, width, indent="  "):
+    out = []
+    for para in text.splitlines():
+        if not para.strip():
+            out.append("")
+            continue
+        out.extend(textwrap.wrap(para, width=width, initial_indent=indent, subsequent_indent=indent) or [""])
+    return out
+
+
+def preview_conversation(session_id, home, cwd):
+    width = max(30, int(os.environ.get("FZF_PREVIEW_COLUMNS", "60")) - 2)
+    if not session_id:
+        print()
+        print(BOLD + "Start a new conversation" + RESET)
+        print()
+        print("You'll pick a folder next. Claude works inside")
+        print("the folder you choose.")
+        return
+    live = live_sessions().get(session_id)
+    path = find_transcript(home, session_id) if home else None
+    info = cached_summary(path) if path else None
+    title = title_of(info) or (live["name"] if live else "") or "New conversation"
+
+    print(BOLD + title + RESET)
+    meta = [tilde(cwd)]
+    if live:
+        meta.append((ALERT if live["status"] == "needs you" else ACCENT) + live["status"] + RESET + SOFT)
+    elif path:
+        meta.append(ago(os.path.getmtime(path)))
+    if info and info["prompts"]:
+        meta.append("%d message%s from you" % (info["prompts"], "" if info["prompts"] == 1 else "s"))
+    print(SOFT + "  ·  ".join(m for m in meta if m) + RESET)
+    if live and live["window"]:
+        print(SOFT + "Open now. Enter jumps to its window." + RESET)
+    print()
+
+    if not path:
+        print(SOFT + "Nothing said yet." + RESET)
+        return
+
+    turns = []
+    try:
+        with open(path, "rb") as handle:
+            for raw in handle:
+                if b'"type":"user"' not in raw and b'"type":"assistant"' not in raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    continue
+                text = prompt_text(record)
+                if text:
+                    turns.append(("you", text))
+                    continue
+                text = reply_text(record)
+                if text:
+                    if turns and turns[-1][0] == "claude":
+                        turns[-1] = ("claude", turns[-1][1] + "\n\n" + text)
+                    else:
+                        turns.append(("claude", text))
+    except OSError:
+        return
+
+    for who, text in turns[-12:]:
+        if len(text) > 1400:
+            text = text[:1400].rstrip() + " …"
+        if who == "you":
+            print(ACCENT + BOLD + "You" + RESET)
+        else:
+            print(BOLD + "Claude" + RESET)
+        for line in wrap_block(text, width):
+            print(line)
+        print()
+
+
+def preview_folder(path):
+    width = max(30, int(os.environ.get("FZF_PREVIEW_COLUMNS", "60")) - 2)
+    if not path or not os.path.isdir(path):
+        return
+    print(BOLD + tilde(path) + RESET)
+    try:
+        branch = subprocess.run(["git", "-C", path, "branch", "--show-current"], capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        branch = ""
+    if branch:
+        print(SOFT + "git branch " + branch + RESET)
+    print()
+    here = [c for c in conversations() if c["info"].get("cwd") == path]
+    if here:
+        print(SOFT + "Recent conversations here" + RESET)
+        for convo in here[:6]:
+            print("  " + clip(title_of(convo["info"]) or "Untitled", width - 14).ljust(width - 14) + SOFT + ago(convo["mtime"]) + RESET)
+        print()
+    try:
+        names = sorted(os.listdir(path), key=lambda n: (not os.path.isdir(os.path.join(path, n)), n.lower()))
+    except OSError:
+        names = []
+    shown = [n + ("/" if os.path.isdir(os.path.join(path, n)) else "") for n in names if not n.startswith(".")]
+    if shown:
+        print(SOFT + "Files" + RESET)
+        for name in shown[:24]:
+            print("  " + name)
+        if len(shown) > 24:
+            print(SOFT + "  and %d more" % (len(shown) - 24) + RESET)
+
+
+# --------------------------------------------------------------------------
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "--preview":
+        args = (argv[2:] + ["", "", ""])[:3]
+        preview_conversation(*args)
+        return 0
+    if len(argv) >= 2 and argv[1] == "--folder-preview":
+        preview_folder(argv[2] if len(argv) > 2 else "")
+        return 0
+    if len(argv) >= 2 and argv[1] == "--list":
+        live = live_sessions()
+        for row in conversation_rows(conversations(), live, 100):
+            print(row.split("\t")[0])
+        return 0
+
+    sys.stdout.write("\033]0;Claude conversations\007")
+    sys.stdout.flush()
+    while True:
+        action, cwd = pick_conversation()
+        if action == "quit" or action == "done":
+            return 0
+        if action == "again":
+            continue
+        if action == "new-here" and cwd and os.path.isdir(cwd):
+            start_new(cwd)
+            return 0
+        folder = pick_folder()
+        if folder is None or folder == "":
+            continue  # Esc or a bad path: back to the list
+        start_new(folder)
+        return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except KeyboardInterrupt:
+        sys.exit(130)

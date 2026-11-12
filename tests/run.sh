@@ -1,0 +1,19 @@
+#!/bin/bash
+# Renders every notch, side strip and dock scenario off screen into a folder,
+# for looking at, and runs the pointer tests (drag, click, hover).
+#   tests/run.sh [outdir]
+set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
+out=${1:-$(mktemp -d)}
+mkdir -p "$out"
+export QT_QPA_PLATFORM=offscreen
+for s in open idle needs toast art steps open-light needs-light toast-light; do timeout 30 qml6 "$here/tests/Harness.qml" -- "$out" "$s" >/dev/null 2>&1; done
+for s in open motion open-light; do timeout 30 qml6 "$here/tests/SideHarness.qml" -- "$out" "$s" >/dev/null 2>&1; done
+# The dock's pieces, on every edge; tests/mock stands in for Omarchy's qs.Commons.
+for m in dark light; do timeout 30 qml6 -I "$here/tests/mock" "$here/tests/DockHarness.qml" -- "$out" "$m" >/dev/null 2>&1; done
+for t in tst_side tst_notch; do
+  QT_QPA_PLATFORM=offscreen timeout 60 /usr/lib/qt6/bin/qmltestrunner -input "$here/tests/$t.qml" 2>&1 | grep -E "^(FAIL|Totals)" | sed "s/^/$t: /" || true
+done
+count=$(ls "$out"/*.png 2>/dev/null | wc -l)
+echo "$count frames in $out"
+[[ $count -ge 30 ]]

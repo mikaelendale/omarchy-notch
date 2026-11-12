@@ -1,0 +1,32 @@
+# Every component in this plugin (a qmldir makes the folder a module, so
+# each type is listed); Theme is the one singleton.
+singleton Theme 1.0 Theme.qml
+Bar 1.0 Bar.qml
+BatteryIcon 1.0 BatteryIcon.qml
+BluetoothIcon 1.0 BluetoothIcon.qml
+ClaudeCard 1.0 ClaudeCard.qml
+ClaudeLogo 1.0 ClaudeLogo.qml
+CoverArt 1.0 CoverArt.qml
+DisplayIcon 1.0 DisplayIcon.qml
+EqBars 1.0 EqBars.qml
+Fillet 1.0 Fillet.qml
+Flyout 1.0 Flyout.qml
+HoverGroup 1.0 HoverGroup.qml
+HSlider 1.0 HSlider.qml
+MediaCard 1.0 MediaCard.qml
+MenuRow 1.0 MenuRow.qml
+ModeButton 1.0 ModeButton.qml
+Notch 1.0 Notch.qml
+NotchShape 1.0 NotchShape.qml
+SessionRow 1.0 SessionRow.qml
+SideNotch 1.0 SideNotch.qml
+SideNotchShape 1.0 SideNotchShape.qml
+StripIcon 1.0 StripIcon.qml
+TodayCard 1.0 TodayCard.qml
+TrayButton 1.0 TrayButton.qml
+UsageDial 1.0 UsageDial.qml
+UsageMeter 1.0 UsageMeter.qml
+VolumeIcon 1.0 VolumeIcon.qml
+WidgetHost 1.0 WidgetHost.qml
+WifiIcon 1.0 WifiIcon.qml
+AgentMark 1.0 AgentMark.qml
