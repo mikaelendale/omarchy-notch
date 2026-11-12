@@ -128,7 +128,8 @@ CLONES = {
         # the notch's spring. Those four files come from look/dock. And since a
         # copy can't read shell.json through the shell, its pinned apps and
         # position come from the file (pins are saved with `omarchy-dock
-        # pinned`, which writes the same file).
+        # pinned`, which writes the same file). A copy isn't given Omarchy's app
+        # list either, so it runs Omarchy's app library itself.
         "add": {name: os.path.join(PLUGIN, "look/dock", name)
                 for name in ("DockGlass.qml", "DockDot.qml", "DockLabel.qml", "DockSeparator.qml")},
         "files": {"DockWindow.qml": [
@@ -259,6 +260,23 @@ CLONES = {
                 "    }\n"
                 "  }\n"
                 "  readonly property var dockConfig: shell && shell.shellConfig && shell.shellConfig.dock ? shell.shellConfig.dock : root.fileDockConfig\n",
+            ),
+            (
+                "import \"DockModel.js\" as DockModel\n",
+                "import qs.services as OmarchyServices\n"
+                "import \"DockModel.js\" as DockModel\n",
+            ),
+            (
+                "  readonly property var appLibrary: shell ? shell.appLibrary : null\n",
+                "  // notch-look: Omarchy only hands its app list to its own dock and to\n"
+                "  // menus, so a copy got none: the all-apps grid was empty and pinned apps\n"
+                "  // wouldn't launch. The copy runs Omarchy's app library itself instead.\n"
+                "  readonly property var appLibrary: shell && shell.appLibrary ? shell.appLibrary : ownAppLibrary.item\n"
+                "  Loader {\n"
+                "    id: ownAppLibrary\n"
+                "    active: !(root.shell && root.shell.appLibrary)\n"
+                "    sourceComponent: Component { OmarchyServices.AppLibrary { } }\n"
+                "  }\n",
             ),
         ]},
     },
