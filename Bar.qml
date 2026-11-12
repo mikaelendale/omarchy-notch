@@ -292,6 +292,7 @@ Item {
   // claude-sessions widget's collector, the others by watching their terminals.
   // A non-Claude session whose terminal rang the bell (Hyprland's urgent flag)
   // is waiting on you.
+  Text { id: fontProbe; visible: false; text: "Ag"; font.family: "monospace" }
   property var agentsRaw: ({ sessions: [], counts: ({}) })
   // `omarchy-shell mike.notch previewSessions` (or `notch-look preview`): a
   // minute of made-up sessions, to see the notch with a crowd of them.
@@ -508,6 +509,9 @@ Item {
     function sideState(): string { return sideNotch.debugState() }
     // Show what a "Claude needs you" toast looks like.
     function previewSessions(): void { root.previewSessions() }
+    // The family Omarchy's "monospace" resolves to in this shell (for testing
+    // `notch-look font`).
+    function fontCheck(): string { return fontProbe.fontInfo.family }
     function previewToast(): void {
       root.alert = { title: "Claude needs you", detail: "This is what a waiting session looks like", session: null }
       alertTimer.restart()

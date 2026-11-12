@@ -1,10 +1,14 @@
 # Notch
 
-Replaces Omarchy's top bar with a frosted notch in your theme's colours, and adds a slim strip of quick controls to the edge of the screen. Made for light and dark themes alike.
+Replaces Omarchy's top bar with a frosted notch in your theme's colours, and adds a slim strip of quick controls to the edge of the screen and a dock to match. Made for light and dark themes alike.
+
+![The notch opened: menu, clock and status buttons, with cards for music, today and your coding agents](screenshots/notch-open-dark.png)
 
 Tested on Omarchy 4.5 (Hyprland 0.56, Quickshell 0.3).
 
-## Install
+## Install on Omarchy
+
+Two commands in a terminal:
 
 ```bash
 omarchy plugin add https://github.com/mikaelendale/omarchy-notch
@@ -31,6 +35,37 @@ o.rebind("SUPER + SHIFT + C", "Claude conversations",
   "omarchy-launch-or-focus-tui --app-id=org.omarchy.claude-conversations claude-conversations")
 ```
 
+## Screenshots
+
+The whole desktop, dark (Starship) and light (Catppuccin Latte): the notch at the top, the strip resting on the right edge, the dock at the bottom.
+
+<p>
+  <img src="screenshots/desktop-dark.jpg" width="49%" alt="The desktop in a dark theme: the closed notch at the top, the strip on the right edge, the dock at the bottom">
+  <img src="screenshots/desktop-light.jpg" width="49%" alt="The same desktop in a light theme">
+</p>
+
+The notch opened, in a light theme:
+
+![The notch opened in a light theme, with white cards](screenshots/notch-open-light.png)
+
+The side strip: Modes dropped down, and the volume sliding out.
+
+<p>
+  <img src="screenshots/side-modes-dark.png" width="24%" alt="The side strip with its Modes switches dropped down, dark">
+  <img src="screenshots/side-volume-dark.png" width="24%" alt="The volume slider sliding out of the strip, dark">
+  <img src="screenshots/side-modes-light.png" width="24%" alt="The side strip with its Modes switches dropped down, light">
+  <img src="screenshots/side-volume-light.png" width="24%" alt="The volume slider sliding out of the strip, light">
+</p>
+
+The dock, with an app's name on hover and dots under the open ones:
+
+![The dock in a dark theme, Google Chrome hovered](screenshots/dock-dark.png)
+![The dock in a light theme, Google Chrome hovered](screenshots/dock-light.png)
+
+A session that needs you grows the notch into a toast:
+
+![A "Claude needs you" toast in the notch, with an Open button](screenshots/toast-dark.png)
+
 ## Turning it on and off
 
 `notch-look` switches each part on its own, and every change is undone by the opposite command:
@@ -49,6 +84,7 @@ notch-look windows under|below           # full screen under the notch, or a str
 notch-look dock frosted|plain            # the dock in the notch's style, or Omarchy's own
 notch-look motion on|off                 # smoother window animations and soft shadows
 notch-look bell on|off                   # a terminal's bell shows its agent as needing you (foot)
+notch-look font on|off                   # Omarchy's panels and menus in the notch's font
 notch-look preview                       # a minute of made-up agent sessions, to see it busy
 ```
 
@@ -58,6 +94,7 @@ It only edits marked blocks in your own config files:
 - `~/.config/omarchy/shell.toml`
 - `~/.config/foot/foot.ini`
 - the bar and plugin entries in `~/.config/omarchy/shell.json`
+- `~/.config/fontconfig/conf.d/10-notch-look.conf` (its own file)
 
 Nothing of Omarchy's own is touched, so updates keep coming either way. If this plugin ever fails to load, Omarchy falls back to its own bar by itself.
 
@@ -70,6 +107,8 @@ Nothing of Omarchy's own is touched, so updates keep coming either way. If this 
 - status colours deepened so they read on a light surface
 
 Status colours (working, needs you, charging, the mode switches) are fixed system colours. That way a theme can't turn "charging" grey or "needs you" blue.
+
+**One font:** the notch is set in Adwaita Sans. Omarchy draws its own panels, menus, notifications and the dock's labels in the system's monospace font, so `notch-look font on` gives Omarchy's shell, and only it, Adwaita Sans as well. Everything around the notch then reads as one design, and your terminals keep their monospace font (Adwaita Mono, its sibling, pairs best).
 
 **Notifications under the notch, and the frosted dock** use copies of Omarchy's notification service and dock: `~/.config/omarchy/plugins/<you>.notifications` and `<you>.dock`. Each has a few lines changed:
 
@@ -153,6 +192,7 @@ It works on any edge: `omarchy dock position bottom|left|right|top`. `notch-look
 | `look/surfaces.toml` | The frosted surfaces `notch-look surfaces on` puts into `shell.toml` |
 | `look/dock/` | The dock's glass, open-app dots, name labels and separator, copied into notch-look's copy of Omarchy's dock |
 | `tests/` | Off-screen renders and pointer tests (`tests/mock` stands in for Omarchy's colours and fonts for the dock) |
+| `screenshots/` | The pictures in this README |
 
 Claude's mark comes from Omarchy's own copy of the official logo (`/usr/share/omarchy/shell/plugins/agents/assets/claude.svg`).
 
@@ -171,6 +211,6 @@ This does two things:
 
 Cover art only renders on a real screen.
 
-On a real screen, `omarchy-shell mike.notch previewToast` shows a toast, `omarchy-shell mike.notch open` and `close` open and shut the notch, and `omarchy-shell mike.notch sideState` prints what the side strip thinks is going on. `python3 agents.py --once` prints every agent session it finds.
+On a real screen, `omarchy-shell mike.notch previewToast` shows a toast, `omarchy-shell mike.notch open` and `close` open and shut the notch, and `omarchy-shell mike.notch sideState` prints what the side strip thinks is going on. `python3 agents.py --once` prints every agent session it finds, and `omarchy-shell mike.notch fontCheck` prints the font Omarchy's shell is drawing in.
 
 When scripting hovers with `hyprctl dispatch 'hl.dsp.cursor.move(...)'`, move straight onto the icon from outside the strip. Hyprland only reports a warp to a surface the pointer is entering, so stepping across the strip in several warps stalls where it came in. Omarchy focuses whatever window is under the pointer, so don't move it while someone is typing.

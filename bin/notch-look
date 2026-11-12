@@ -23,6 +23,9 @@
                                    you, so agents other than Claude can say so
                                    (foot only)
   notch-look dock frosted|plain    the dock in the notch's style, or Omarchy's own
+  notch-look font on|off           Omarchy's panels, menus, notifications and dock
+                                   in the notch's font (Adwaita Sans); terminals
+                                   keep the system monospace font
   notch-look preview               a minute of made-up agent sessions in the notch
                                    (and the Claude sessions panel), to see it busy
 
@@ -32,6 +35,7 @@ is touched. The files it manages:
                                        "frost" and "motion" markers)
   ~/.config/omarchy/shell.toml        (block between "notch-look: surfaces" markers)
   ~/.config/foot/foot.ini             (block between "notch-look: bell" markers)
+  ~/.config/fontconfig/conf.d/10-notch-look.conf  (the shell's font)
   ~/.config/omarchy/shell.json        (bar.id, plugins, claude-sessions notify)
   ~/.local/state/mike-notch/*.json    (side strip, preferences, the bar you had)
   ~/.config/omarchy/plugins/<you>.notifications, <you>.dock
@@ -270,6 +274,42 @@ def clone_dir(name):
 
 
 FOOT = os.path.join(HOME, ".config/foot/foot.ini")
+# Omarchy's shell draws everything in the system's "monospace" font; this
+# fontconfig rule gives that one program (quickshell) the notch's font
+# instead, so the panels, menus and notifications match the notch, while
+# terminals keep their monospace font.
+FONT_CONF = os.path.join(HOME, ".config/fontconfig/conf.d/10-notch-look.conf")
+FONT_RULE = """<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<!-- notch-look: Omarchy's shell (quickshell) draws in the notch's font,
+     Adwaita Sans, instead of the system monospace font, so its panels, menus,
+     notifications and dock match the notch. Terminals keep their monospace
+     font. Managed by `notch-look font on|off`.
+
+     Omarchy asks for "monospace", and later rules (Omarchy's own, and the
+     fonts.conf `omarchy font set` writes) put their font first whenever that
+     name is still asked for. So for this one program the name is taken out,
+     and Adwaita Sans goes first; the fonts already lined up behind it stay,
+     for icon glyphs, emoji and other scripts. -->
+<fontconfig>
+  <match target="pattern">
+    <test name="prgname"><string>quickshell</string></test>
+    <test name="family" qual="any"><string>monospace</string></test>
+    <edit name="family" mode="delete"/>
+    <edit name="family" mode="prepend_first" binding="strong"><string>Adwaita Sans</string></edit>
+  </match>
+  <match target="pattern">
+    <test name="prgname"><string>quickshell</string></test>
+    <test name="family" qual="any"><string>monospace</string></test>
+    <edit name="family" mode="delete"/>
+  </match>
+  <match target="pattern">
+    <test name="prgname"><string>quickshell</string></test>
+    <test name="family" qual="any"><string>monospace</string></test>
+    <edit name="family" mode="delete"/>
+  </match>
+</fontconfig>
+"""
 FROST_START = "-- notch-look: frost"
 FROST_END = "-- notch-look: end frost"
 MOTION_START = "-- notch-look: motion"
@@ -531,6 +571,20 @@ def set_bell(on):
     set_block(FOOT, BELL_START, BELL_END, BELL_BLOCK, on)
 
 
+def font_now():
+    return os.path.exists(FONT_CONF)
+
+
+def set_font(on, restart=True):
+    if on:
+        write(FONT_CONF, FONT_RULE)
+    elif os.path.exists(FONT_CONF):
+        os.remove(FONT_CONF)
+    if restart:
+        # The shell picks its fonts when it starts.
+        run("omarchy", "restart", "shell")
+
+
 def windows_now():
     return read_json(PREFS).get("windowsUnderNotch") is True
 
@@ -679,6 +733,7 @@ def status():
         ("motion", "smooth" if motion_now() else "Omarchy's own"),
         ("bell", "flags the window" if bell_now() else "off"),
         ("dock", "frosted" if clone_now("dock") else "Omarchy's own"),
+        ("font", "the notch's (Adwaita Sans)" if font_now() else "system monospace"),
     ]
     for name, value in rows:
         print(f"  {name:<14} {value}")
@@ -710,6 +765,7 @@ def main(argv):
         set_motion(False)
         set_bell(False)
         set_toasts(False)
+        set_font(False, restart=False)
         run("omarchy", "restart", "shell")
         print("Back to stock Omarchy. `notch-look on` brings it all back.")
     elif cmd == "on":
@@ -718,6 +774,7 @@ def main(argv):
         set_motion(True)
         set_bell(True)
         set_toasts(True)
+        set_font(True, restart=False)
         set_bar(True)
         set_side(True)
         set_clone("dock", True, restart=False)
@@ -744,6 +801,8 @@ def main(argv):
         set_motion(on_off(arg))
     elif cmd == "bell":
         set_bell(on_off(arg))
+    elif cmd == "font":
+        set_font(on_off(arg))
     elif cmd == "refresh":
         refresh_clones()
         return 0
