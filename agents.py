@@ -1,35 +1,44 @@
 #!/usr/bin/env python3
-"""Every coding agent's sessions, for the notch: Claude Code and the rest.
+"""Every coding agent's sessions: Claude Code, Codex, and the other CLIs.
 
 Prints one JSON object per line whenever something changes:
 
-  {"sessions": [{"id", "agent", "label", "project", "cwd", "state", "window",
-                 "workspace", "focused", "pid", "since"}...],
+  {"sessions": [{"id", "agent", "agentName", "label", "project", "cwd",
+                 "state", "reason", "detail", "since", "window", "workspace",
+                 "focused", "tmux", "pid"}...],
    "counts": {"needs", "done", "working", "watching", "idle", "total"}}
 
-Claude Code reports exactly what it's doing (working, waiting on you, done),
-read by claude_sessions.py (the claude-sessions bar widget's collector).
+state is "needs" (waiting on you), "done" (finished while you were looking
+elsewhere: your turn), "working" or "idle".
+
+Claude Code says exactly what it's doing in ~/.claude/sessions, read by
+sessions.py (claude_sessions.py where it's bundled).
 
 Codex logs every turn of a session (~/.codex/sessions/.../rollout-*.jsonl), so
 it's read from there just as exactly: working from the turn starting until it
-ends, waiting on you while it asks to run something, done when it finished in
-a window you weren't looking at.
+ends, waiting on you while it asks to run something.
 
-The other agents (OpenCode, Antigravity, Crush, Amp, Cursor, Copilot, Kimi,
-Qwen, Grok, Devin...) don't say, so they're found as processes running in the
-foreground of a terminal, and called "working" while they draw to it (a
-spinner, streamed output) or use the CPU, "idle" otherwise. Only what runs on
-the agent's own terminal counts: background helpers don't.
+The other agents (OpenCode, Crush, Amp, Cursor, Copilot, Kimi, Qwen, Gemini,
+Grok, Devin, Kilo...) don't say, so they're found as processes in the
+foreground of a terminal and called "working" while they draw to it. A
+working agent streams text or animates a spinner; an idle one sits still. What
+reaches the screen is measured as what the terminal window's own process reads
+(its rchar), which is exact when that process has one window, as Omarchy's
+foot windows do. Where it can't be (a terminal process with several windows,
+tmux, no window found), the agent's CPU is used instead, and only counts when
+it stays up for a few seconds: idle CLIs run short update checks.
 
-When an agent rings the bell in a window you're not looking at (agents do, to
-ask for you), foot runs bell.sh, which notes the terminal; that session is
+When an agent rings the bell in a window you're not looking at, a bell hook
+(the notch plugin installs one for foot) notes the terminal; that session is
 "needs you" until you go to it or it gets busy again.
 
-  agents.py            stream
-  agents.py --once     print one snapshot and exit
+  agents.py                      stream
+  agents.py --once               print one snapshot and exit
+  agents.py --notify unfocused   also notify when a session starts needing you
 """
 
 import argparse
+import collections
 import importlib.util
 import json
 import os
@@ -39,15 +48,25 @@ import time
 
 HOME = os.path.expanduser("~")
 HERE = os.path.dirname(os.path.realpath(__file__))
-# Claude Code's sessions are read by claude_sessions.py, which ships with this
-# plugin (it's the claude-sessions bar widget's collector).
-SESSIONS_PY = os.path.join(HERE, "claude_sessions.py")
+# Claude Code's collector: claude_sessions.py where the notch bundles it,
+# sessions.py in the claude-sessions widget.
+SESSIONS_PY = next((path for path in (os.path.join(HERE, "claude_sessions.py"),
+                                      os.path.join(HERE, "sessions.py")) if os.path.exists(path)),
+                   os.path.join(HERE, "sessions.py"))
 
 POLL_SECONDS = 1.0
 HEARTBEAT_EVERY = 30.0
-ACTIVE_WRITE_BYTES = 120      # tty output in the last few seconds that counts as working
-ACTIVE_CPU_PERCENT = 4.0
-ACTIVE_HOLD_SECONDS = 3.0     # stay "working" this long after the last sign of it
+# What a terminal reads from a working agent: measured at 4-34 KB/s for
+# OpenCode streaming and about 1 KB/s for Claude Code's spinner alone. Idle
+# agents send nothing, or a cursor blink (~170 bytes every few seconds).
+OUTPUT_BYTES_PER_SECOND = 400
+# CPU fallback: working while the agent's terminal processes stay above this
+# for most of the last few seconds. Idle CLIs measured 0-3%, with one- or
+# two-second bursts to 15-30% (update checks); streaming 8-60%.
+CPU_PERCENT = 6.0
+CPU_WINDOW = 4                # seconds looked at
+CPU_NEEDED = 3                # of which this many must be busy
+HOLD_SECONDS = 3.0            # stay "working" this long after the last sign of it
 
 # Agent id -> executable or script names it runs as. The id names the mark in
 # /usr/share/omarchy/shell/plugins/agents/assets/<id>.svg where there is one.
@@ -59,12 +78,12 @@ AGENTS = {
     "amp": {"amp"},
     "cursor": {"cursor-agent"},
     "copilot": {"copilot"},
-    "kimi": {"kimi"},
-    "qwen": {"qwen"},
-    "gemini": {"gemini"},
+    "kimi": {"kimi", "kimi-code"},
+    "qwen": {"qwen", "qwen-code"},
+    "gemini": {"gemini", "gemini-cli"},
     "grok": {"grok"},
     "devin": {"devin"},
-    "kilo": {"kilo"},
+    "kilo": {"kilo", "kilocode"},
     "hermes": {"hermes"},
     "muse": {"muse"},
     "goose": {"goose"},
@@ -75,16 +94,17 @@ AGENTS = {
 NAMES = {name: agent for agent, names in AGENTS.items() for name in names}
 INTERPRETERS = {"node", "bun", "deno", "python", "python3", "uv", "uvx", "npx", "bash", "sh"}
 DISPLAY = {
-    "codex": "Codex", "opencode": "OpenCode", "agy": "Antigravity", "crush": "Crush",
-    "amp": "Amp", "cursor": "Cursor", "copilot": "Copilot", "kimi": "Kimi",
+    "claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "agy": "Antigravity",
+    "crush": "Crush", "amp": "Amp", "cursor": "Cursor", "copilot": "Copilot", "kimi": "Kimi",
     "qwen": "Qwen", "gemini": "Gemini", "grok": "Grok", "devin": "Devin", "kilo": "Kilo",
     "hermes": "Hermes", "muse": "Muse", "goose": "Goose", "aider": "Aider",
     "omp": "Oh My Pi", "pi": "Pi",
 }
 BELLS = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local/state"), "mike-notch/bells")
 BELL_MAX_AGE = 3600.0
-SPINNER = re.compile(r"^[\s⠀-⣿◐-◓✳✶✢✻✽·•*◐◑◒◓⠁-⣿|/\\-]+")
+SPINNER = re.compile(r"^[\s⠀-⣿◐-◓✳✶✢✻✽·•*|/\\-]+")
 CLK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+ORDER = {"needs": 0, "done": 1, "working": 2, "watching": 3, "idle": 4}
 
 CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
 CODEX_SESSIONS = os.path.join(CODEX_HOME, "sessions")
@@ -98,7 +118,7 @@ QUIET = {"token_count"}       # bookkeeping that says nothing about the turn
 
 
 def load_claude_collector():
-    """The bundled Claude sessions collector, or None if it fails to load."""
+    """The Claude sessions collector module, or None if it fails to load."""
     try:
         spec = importlib.util.spec_from_file_location("claude_sessions", SESSIONS_PY)
         module = importlib.util.module_from_spec(spec)
@@ -146,29 +166,37 @@ def started_at(pid):
         return 0.0
 
 
-def agent_of(pid):
-    """The agent this process is, by its executable or script name, or None."""
-    args = [a for a in read(f"/proc/{pid}/cmdline", binary=True).split(b"\0") if a]
+def program_name(arg):
+    """'amp' from '/…/@ampcode/cli/bin/amp.exe', 'qwen' from 'qwen.js'."""
+    base = os.path.basename(arg)
+    return re.sub(r"\.(js|mjs|cjs|py|exe)$", "", base)
+
+
+def agent_from_args(args):
+    """The agent a command line runs, by executable or script name, or None."""
+    args = [a for a in args if a]
     if not args:
         return None
-    names = []
-    for arg in args[:3]:
-        base = os.path.basename(arg.decode("utf-8", "replace"))
-        base = re.sub(r"\.(js|mjs|cjs|py)$", "", base)
-        names.append(base)
-    if names[0] in NAMES:
-        return NAMES[names[0]]
-    if names[0] in INTERPRETERS:
-        for name in names[1:]:
+    first = program_name(args[0])
+    if first in NAMES:
+        return NAMES[first]
+    if first in INTERPRETERS:
+        for arg in args[1:3]:
+            name = program_name(arg)
             if name in NAMES:
                 return NAMES[name]
-            # node .../node_modules/@openai/codex/bin/codex.js
+        # node …/node_modules/@openai/codex/bin/cli.js, …/@qwen-code/qwen-code/cli-entry.js
         for arg in args[1:3]:
-            parts = arg.decode("utf-8", "replace").split("/")
-            for part in parts:
+            for part in arg.split("/"):
+                part = part.lstrip("@")
                 if part in NAMES:
                     return NAMES[part]
     return None
+
+
+def agent_of(pid):
+    raw = read(f"/proc/{pid}/cmdline", binary=True).split(b"\0")[:3]
+    return agent_from_args([a.decode("utf-8", "replace") for a in raw])
 
 
 def children_map():
@@ -209,24 +237,94 @@ def on_tty(pids, tty):
     return out
 
 
-def usage(pids):
-    """(cpu jiffies, bytes written) summed over these processes."""
-    cpu = 0
-    written = 0
+def cpu_jiffies(pids):
+    total = 0
     for p in pids:
         fields = stat_fields(p)
         if fields and len(fields) > 13:
             try:
-                cpu += int(fields[11]) + int(fields[12])
+                total += int(fields[11]) + int(fields[12])
             except ValueError:
                 pass
-        for line in read(f"/proc/{p}/io").splitlines():
-            if line.startswith("wchar:"):
-                try:
-                    written += int(line.split()[1])
-                except ValueError:
-                    pass
-    return cpu, written
+    return total
+
+
+def bytes_read(pid):
+    """Everything the process has read (rchar): for a terminal, mostly what
+    its programs printed."""
+    for line in read(f"/proc/{pid}/io").splitlines():
+        if line.startswith("rchar:"):
+            try:
+                return int(line.split()[1])
+            except ValueError:
+                return None
+    return None
+
+
+# ------------------------------------------------------------------ deciding
+
+class Activity:
+    """Working or idle for agents that don't say, from samples of what their
+    terminal read and their CPU. Pure, so it can be tested with numbers."""
+
+    def __init__(self):
+        self.last = {}        # key -> (time, cpu jiffies, terminal bytes or None)
+        self.cpu = {}         # key -> recent busy/not busy, one per sample
+        self.until = {}       # key -> time it counts as working until
+        self.seen = {}        # key -> wall-clock time it was last working
+
+    def update(self, key, now, cpu, terminal_bytes):
+        before = self.last.get(key)
+        self.last[key] = (now, cpu, terminal_bytes)
+        history = self.cpu.setdefault(key, collections.deque(maxlen=CPU_WINDOW))
+        if before:
+            dt = max(0.05, now - before[0])
+            busy_cpu = 100.0 * (cpu - before[1]) / CLK / dt >= CPU_PERCENT
+            history.append(busy_cpu)
+            if terminal_bytes is not None and before[2] is not None:
+                active = (terminal_bytes - before[2]) / dt >= OUTPUT_BYTES_PER_SECOND
+            else:
+                active = sum(history) >= CPU_NEEDED
+            if active:
+                self.until[key] = now + HOLD_SECONDS
+                self.seen[key] = time.time()
+        return "working" if self.until.get(key, 0) > now else "idle"
+
+    def forget(self, keep):
+        for table in (self.last, self.cpu, self.until, self.seen):
+            for key in list(table):
+                if key not in keep:
+                    del table[key]
+
+
+class Turns:
+    """Turns working -> idle into "done" (your turn) when it happens in a window
+    you aren't looking at, until you look; and keeps when each state began."""
+
+    def __init__(self):
+        self.memory = {}      # key -> {"state", "done", "since"}
+
+    def update(self, key, state, focused, now_ms):
+        memory = self.memory.get(key)
+        if memory is None:
+            memory = {"state": state, "done": False, "since": now_ms}
+        done = memory["done"]
+        if state == "idle":
+            if memory["state"] == "working" and not focused:
+                done = True
+            if focused:
+                done = False
+        else:
+            done = False
+        shown = "done" if done else state
+        since = memory["since"] if memory.get("shown") == shown else now_ms
+        self.memory[key] = {"state": state, "done": done, "since": since, "shown": shown}
+        return shown, since
+
+    def forget(self, keep):
+        for key in list(self.memory):
+            if key not in keep:
+                del self.memory[key]
 
 
 # ------------------------------------------------------------------ Codex
@@ -427,10 +525,8 @@ class Others:
     def __init__(self, hypr):
         self.hypr = hypr
         self.codex = Codex()
-        self.last = {}        # pid -> (time, cpu, written)
-        self.active_until = {}
-        self.active_at = {}   # pid -> wall-clock time it was last seen working
-        self.memory = {}      # pid -> {"state", "done"} for agents with a log
+        self.activity = Activity()
+        self.turns = Turns()
 
     def bells(self):
         """terminal pid -> wall-clock time its bell rang."""
@@ -476,20 +572,6 @@ class Others:
             current = parent
         return None
 
-    def guess(self, pid, tree, tty, now):
-        """Working or idle, from what it draws to its terminal and its CPU."""
-        cpu, written = usage(on_tty(tree, tty))
-        before = self.last.get(pid)
-        self.last[pid] = (now, cpu, written)
-        if before:
-            dt = max(0.001, now - before[0])
-            cpu_pct = 100.0 * (cpu - before[1]) / CLK / dt
-            wrote = written - before[2]
-            if cpu_pct >= ACTIVE_CPU_PERCENT or wrote >= ACTIVE_WRITE_BYTES:
-                self.active_until[pid] = now + ACTIVE_HOLD_SECONDS
-                self.active_at[pid] = time.time()
-        return "working" if self.active_until.get(pid, 0) > now else "idle"
-
     def snapshot(self, now):
         windows = {}
         clients = self.hypr.clients() if self.hypr else None
@@ -530,47 +612,39 @@ class Others:
         focused = self.hypr.active_address() if self.hypr else ""
         alive = set()
         sessions = []
+        now_ms = int(time.time() * 1000)
         for pid, agent, tty in found:
             alive.add(pid)
             tree = subtree(pid, kids)
             window = self.window_for(pid, windows)
             address = (window or {}).get("address", "")
             is_focused = bool(address) and address == focused
-            log = codex_logs.get(pid) if agent == "codex" else None
+            term = (window or {}).get("pid")
             label = ""
             if agent == "codex":
                 # Its own log says exactly; no log yet means nothing asked yet.
+                log = codex_logs.get(pid)
                 state = log.state if log else "idle"
                 label = self.codex.title(log.id) if log else ""
                 if state == "working":
-                    self.active_at[pid] = time.time()
+                    self.activity.seen[pid] = time.time()
             else:
-                state = self.guess(pid, tree, tty, now)
+                # What the window's terminal read, when that's this session alone.
+                reads = bytes_read(term) if term and not window.get("shared") else None
+                state = self.activity.update(pid, now, cpu_jiffies(on_tty(tree, tty)), reads)
 
-            # Finished while you were looking elsewhere: "done" until you look.
-            if agent == "codex":
-                memory = self.memory.get(pid, {"state": None, "done": False})
-                done = memory["done"]
-                if state == "idle" and memory["state"] == "working" and not is_focused:
-                    done = True
-                if is_focused or state != "idle":
-                    done = False
-                self.memory[pid] = {"state": state, "done": done}
-                if done:
-                    state = "done"
+            shown, since = self.turns.update(pid, state, is_focused, now_ms)
 
             # Its terminal rang the bell: needs you, until you go to it or it
             # gets busy again after the bell.
-            term = (window or {}).get("pid")
-            reason = "approval" if state == "needs" else ""
+            # Codex asking to run a command or apply a patch: a permission.
+            reason = "permission" if shown == "needs" else ""
             if term in bells:
                 rang = bells[term]
-                if is_focused:
-                    self.clear_bell(term)
-                elif self.active_at.get(pid, 0) > rang + ACTIVE_HOLD_SECONDS:
+                if is_focused or self.activity.seen.get(pid, 0) > rang + HOLD_SECONDS:
                     self.clear_bell(term)
                 else:
-                    state, reason = "needs", "bell"
+                    shown, reason = "needs", "bell"
 
             cwd = os.path.realpath(f"/proc/{pid}/cwd") if os.path.exists(f"/proc/{pid}/cwd") else ""
             if not label:
@@ -585,25 +659,24 @@ class Others:
                 "label": label[:120],
                 "project": os.path.basename(cwd),
                 "cwd": cwd,
-                "state": state,
+                "state": shown,
                 "reason": reason,
                 "detail": "",
+                "since": since,
                 "window": address,
                 "workspace": (window or {}).get("workspace", ""),
                 "focused": is_focused,
+                "tmux": False,
                 "pid": pid,
             })
-        for pid in list(self.last) + list(self.memory) + list(self.active_at):
-            if pid not in alive:
-                self.last.pop(pid, None)
-                self.active_until.pop(pid, None)
-                self.active_at.pop(pid, None)
-                self.memory.pop(pid, None)
+        self.activity.forget(alive)
+        self.turns.forget(alive)
         return sessions
 
 
 class Hypr:
-    """pid -> {pid, address, title, workspace} from hyprctl, and the focused window."""
+    """Fallback when the Claude collector (and its Hyprland socket client)
+    didn't load: pid -> {pid, address, title, workspace, shared} via hyprctl."""
 
     def active_address(self):
         import subprocess
@@ -629,24 +702,22 @@ class Hypr:
                     "address": c.get("address", ""),
                     "title": c.get("title", ""),
                     "workspace": str((c.get("workspace") or {}).get("name", "")),
+                    "shared": pid in result,
                 }
         return result
 
 
 # ------------------------------------------------------------------ main
 
-ORDER = {"needs": 0, "done": 1, "working": 2, "watching": 3, "idle": 4}
-
-
 def combine(claude, others):
     sessions = []
     for s in (claude or {}).get("sessions", []):
         s = dict(s)
         s.setdefault("agent", "claude")
-        s.setdefault("agentName", "Claude")
+        s.setdefault("agentName", DISPLAY["claude"])
         sessions.append(s)
     sessions.extend(others)
-    sessions.sort(key=lambda s: (ORDER.get(s.get("state"), 9), s.get("agentName", "")))
+    sessions.sort(key=lambda s: (ORDER.get(s.get("state"), 9), s.get("since") or 0, s.get("agentName", "")))
     counts = {"needs": 0, "done": 0, "working": 0, "watching": 0, "idle": 0}
     for s in sessions:
         if s.get("state") in counts:
@@ -655,19 +726,50 @@ def combine(claude, others):
     return {"sessions": sessions, "counts": counts}
 
 
+class OtherAlerts:
+    """Notifications for agents other than Claude (whose collector notifies
+    for itself): once when a session starts needing you, withdrawn after."""
+
+    def __init__(self, notifier, mode):
+        self.notifier = notifier
+        self.mode = mode
+        self.needing = set()
+
+    def update(self, sessions):
+        now = set()
+        for s in sessions:
+            if s.get("agent") == "claude" or s.get("state") != "needs":
+                continue
+            now.add(s["id"])
+            if s["id"] in self.needing:
+                continue
+            if self.mode == "always" or (self.mode == "unfocused" and not s.get("focused")):
+                why = "Needs permission" if s.get("reason") == "permission" else "Needs you"
+                body = f"{s.get('agentName', '')}: {why}" + (f" · {s['project']}" if s.get("project") else "")
+                self.notifier.show(s["id"], s.get("label") or s.get("agentName", ""), body, s.get("window", ""))
+        for key in self.needing - now:
+            self.notifier.withdraw(key)
+        self.needing = now
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--notify", choices=["unfocused", "always", "off"], default="off")
     args = parser.parse_args(argv)
 
     cs = load_claude_collector()
+    notifier = cs.Notifier() if cs and args.notify != "off" and not args.once else None
     claude = None
+    hypr = None
     if cs:
         try:
-            claude = cs.Collector(cs.config_homes(), hypr=cs.Hyprland(), notifier=None, notify_mode="off")
+            hypr = cs.Hyprland()
+            claude = cs.Collector(cs.config_homes(), hypr=hypr, notifier=notifier, notify_mode=args.notify)
         except Exception:
             claude = None
-    others = Others(Hypr())
+    others = Others(hypr or Hypr())
+    alerts = OtherAlerts(notifier, args.notify) if notifier else None
 
     def snapshot(now):
         c = None
@@ -676,7 +778,10 @@ def main(argv=None):
                 c = claude.snapshot(now)
             except Exception:
                 c = None
-        return combine(c, others.snapshot(time.monotonic()))
+        payload = combine(c, others.snapshot(time.monotonic()))
+        if alerts:
+            alerts.update(payload["sessions"])
+        return payload
 
     if args.once:
         snapshot(time.monotonic())
