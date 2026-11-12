@@ -25,7 +25,7 @@ HOME = os.path.expanduser("~")
 AGENT_APP_ID = "org.omarchy.agent"  # same class as `omarchy agent` windows
 CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "claude-conversations")
 CACHE_FILE = os.path.join(CACHE_DIR, "index.json")
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 SELF = os.path.realpath(__file__)
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -185,9 +185,12 @@ def summarize(path):
             if kind == "user":
                 if info["cwd"] is None and isinstance(record.get("cwd"), str):
                     info["cwd"] = record["cwd"]
+                # Judge by how the session started: a terminal session later
+                # continued once from another app is still yours.
                 entry = record.get("entrypoint")
-                if isinstance(entry, str) and entry.startswith("sdk"):
-                    info["sdk"] = True
+                if not info.get("entry_seen") and isinstance(entry, str):
+                    info["entry_seen"] = True
+                    info["sdk"] = entry.startswith("sdk")
                 text = prompt_text(record)
                 if text:
                     info["prompts"] += 1
