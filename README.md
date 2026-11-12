@@ -49,6 +49,7 @@ notch-look windows under|below           # full screen under the notch, or a str
 notch-look dock frosted|plain            # the dock in the notch's style, or Omarchy's own
 notch-look motion on|off                 # smoother window animations and soft shadows
 notch-look bell on|off                   # a terminal's bell shows its agent as needing you (foot)
+notch-look preview                       # a minute of made-up agent sessions, to see it busy
 ```
 
 It only edits marked blocks in your own config files:
@@ -98,7 +99,7 @@ Closed, it shows your agent's mark, the time, Wi-Fi and the battery, like a phon
 **Open:** hover the notch to open the full bar:
 
 - the Omarchy menu, the clock, and one scrollable row of round buttons: Wi-Fi, Bluetooth, volume, battery, displays, Claude, agents and the rest of Omarchy's widgets, then every tray app. The icons are the notch's own, drawn from live state. Clicking one opens Omarchy's usual panel, and only one panel is open at a time.
-- cards for what's playing (cover, title, controls), today's date, and your agent sessions.
+- cards for what's playing (cover, title, controls), today's date, and your agent sessions: as many as the card has room for, most urgent first, with the rest counted on the Conversations button. Nothing in the notch scrolls with a scroll bar; long names are cut short with "…".
 
 **Full screen:** normally the notch is solid and keeps a strip of its own at the top, and windows start below it. The **Full screen** switch in the side strip's Modes (or `notch-look windows under`) lets every window run the whole height of the screen, under the notch. In that mode the notch is see-through while nothing's going on, and turns solid when you hover it, when a toast or notification shows, or when an agent needs you.
 
@@ -126,6 +127,7 @@ Omarchy's dock, restyled to match the notch: it sits flush on the screen edge wi
 - A dot under an app means it has a window open; it stretches into a short bar under the app you're using.
 - Hover an icon for its name, in a small frosted pill. Icons lift with the notch's spring.
 - A hairline sets the all-apps button apart from the apps.
+- With more apps than the screen edge has room for, the icons get smaller, so the dock always fits.
 
 It works on any edge: `omarchy dock position bottom|left|right|top`. `notch-look dock plain` switches back to Omarchy's own dock.
 
@@ -162,7 +164,7 @@ tests/run.sh /tmp/notch-frames
 
 This does two things:
 
-- renders every state off screen, using made-up data, into PNGs to look through, in a dark theme and a light one (Catppuccin Latte), including a dock on each screen edge
+- renders every state off screen, using made-up data, into PNGs to look through, in a dark theme and a light one (Catppuccin Latte): a crowd of agent sessions with long names, a dock on each screen edge, and the battery's number at every level
 - runs the pointer tests:
   - the side strip: dragging from the grip, dragging from an icon (which must not click it), clicking, hovering, and Modes opening without moving the rows below, including upward near the bottom of the screen
   - the top notch: hover, and staying open when a panel closes under the pointer

@@ -293,6 +293,28 @@ Item {
   // A non-Claude session whose terminal rang the bell (Hyprland's urgent flag)
   // is waiting on you.
   property var agentsRaw: ({ sessions: [], counts: ({}) })
+  // `omarchy-shell mike.notch previewSessions` (or `notch-look preview`): a
+  // minute of made-up sessions, to see the notch with a crowd of them.
+  property var agentsPreview: null
+  Timer { id: agentsPreviewEnd; interval: 60000; onTriggered: root.agentsPreview = null }
+  function previewSessions() {
+    var agents = ["claude", "codex", "claude", "opencode", "claude", "gemini", "claude"]
+    var names = { claude: "Claude", codex: "Codex", opencode: "OpenCode", gemini: "Gemini" }
+    var labels = ["Fix the flaky payments webhook retries", "Respond to the design review",
+      "Super shift C shortcut for the conversations window", "Refactor the notch hover timing",
+      "Write the release notes", "Buildr creator directory search", "Dock flares on every edge",
+      "Translate the README", "Contextual teaser sky shader", "Bump Hyprland and test the Lua config",
+      "Birthday scrapbook PIN lock", "Sort out the Telegram bot", "RAVN landing copy pass", "Google Drive installation"]
+    var states = ["needs", "needs", "done", "working", "working", "working", "watching", "done", "idle", "idle", "idle", "idle", "idle", "idle"]
+    var list = []
+    for (var i = 0; i < labels.length; i++) {
+      var agent = agents[i % agents.length]
+      list.push({ id: "preview:" + i, agent: agent, agentName: names[agent], label: labels[i], project: "preview",
+        state: states[i], reason: states[i] === "needs" ? "permission" : "", detail: "", window: "", workspace: "", focused: false })
+    }
+    agentsPreview = { sessions: list, counts: {} }
+    agentsPreviewEnd.restart()
+  }
   readonly property var urgentWindows: {
     var out = ({})
     var list = Hyprland.toplevels ? Hyprland.toplevels.values : []
@@ -303,7 +325,7 @@ Item {
     return out
   }
   readonly property var claude: {
-    var raw = agentsRaw
+    var raw = agentsPreview || agentsRaw
     var list = Array.isArray(raw.sessions) ? raw.sessions : []
     var urgent = urgentWindows
     var sessions = []
@@ -320,9 +342,10 @@ Item {
       sessions.push(s)
       if (counts[s.state] !== undefined) counts[s.state]++
     }
+    // Most urgent first. (Not `order[x] || 9`: "needs" is 0, which || skips.)
     sessions.sort(function(a, b) {
       var order = { needs: 0, done: 1, working: 2, watching: 3, idle: 4 }
-      return (order[a.state] || 9) - (order[b.state] || 9)
+      return (a.state in order ? order[a.state] : 9) - (b.state in order ? order[b.state] : 9)
     })
     return { sessions: sessions, counts: counts }
   }
@@ -484,6 +507,7 @@ Item {
     // What the side strip thinks is going on (for testing).
     function sideState(): string { return sideNotch.debugState() }
     // Show what a "Claude needs you" toast looks like.
+    function previewSessions(): void { root.previewSessions() }
     function previewToast(): void {
       root.alert = { title: "Claude needs you", detail: "This is what a waiting session looks like", session: null }
       alertTimer.restart()

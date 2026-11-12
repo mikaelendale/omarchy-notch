@@ -11,6 +11,10 @@ for s in open idle needs toast art steps open-light needs-light toast-light; do 
 for s in open motion open-light; do timeout 30 qml6 "$here/tests/SideHarness.qml" -- "$out" "$s" >/dev/null 2>&1; done
 # The dock's pieces, on every edge; tests/mock stands in for Omarchy's qs.Commons.
 for m in dark light; do timeout 30 qml6 -I "$here/tests/mock" "$here/tests/DockHarness.qml" -- "$out" "$m" >/dev/null 2>&1; done
+# The battery's number at every level, where it crosses the fill.
+for m in dark light; do timeout 30 qml6 "$here/tests/BatteryStrip.qml" -- "$out" "$m" >/dev/null 2>&1; done
+# A crowd of sessions, long names and a full row of buttons.
+for s in many many-light many-toast; do timeout 30 qml6 "$here/tests/Harness.qml" -- "$out" "$s" >/dev/null 2>&1; done
 for t in tst_side tst_notch; do
   QT_QPA_PLATFORM=offscreen timeout 60 /usr/lib/qt6/bin/qmltestrunner -input "$here/tests/$t.qml" 2>&1 | grep -E "^(FAIL|Totals)" | sed "s/^/$t: /" || true
 done

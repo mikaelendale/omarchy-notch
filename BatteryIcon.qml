@@ -33,23 +33,44 @@ Item {
     clip: true
 
     Rectangle {
+      id: fillBar
       height: parent.height
       width: Math.max(parent.radius, parent.width * Math.max(0, Math.min(1, root.level)))
       radius: parent.radius
       color: root.fill
     }
-    Text {
-      anchors.centerIn: parent
+    // The number, drawn twice and cut where the fill ends: the part over the
+    // fill in a colour that reads on it, the rest in the text colour. At 44%
+    // the "4" over the fill and the "4" past it would otherwise lose one of
+    // them, whichever colour the number had.
+    Item {
       visible: root.showNumber && root.present
-      text: Math.round(Math.max(0, Math.min(1, root.level)) * 100)
-      textFormat: Text.PlainText
-      // On the fill when it reaches the middle, on the empty shell otherwise.
-      color: root.level > 0.5 ? Theme.contrastOn(root.fill) : Theme.text
-      font.family: P.sans
-      font.pixelSize: Math.round(root.height * 0.82)
-      font.weight: Font.Bold
-      font.features: { "tnum": 1 }
+      anchors.fill: parent
+      Item {
+        x: fillBar.width
+        width: Math.max(0, parent.width - fillBar.width)
+        height: parent.height
+        clip: true
+        BatteryNumber { x: -parent.x; width: body.width; height: body.height; level: root.level; color: Theme.text }
+      }
+      Item {
+        width: fillBar.width
+        height: parent.height
+        clip: true
+        BatteryNumber { width: body.width; height: body.height; level: root.level; color: Theme.contrastOn(root.fill) }
+      }
     }
+  }
+  component BatteryNumber: Text {
+    property real level: 1
+    horizontalAlignment: Text.AlignHCenter
+    verticalAlignment: Text.AlignVCenter
+    text: Math.round(Math.max(0, Math.min(1, level)) * 100)
+    textFormat: Text.PlainText
+    font.family: P.sans
+    font.pixelSize: Math.round(height * 0.82)
+    font.weight: Font.Bold
+    font.features: { "tnum": 1 }
   }
   // Terminal nub.
   Rectangle {

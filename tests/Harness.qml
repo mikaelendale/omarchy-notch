@@ -4,7 +4,9 @@ import ".."
 
 // Renders the notch off screen with made-up data and saves frames:
 //   QT_QPA_PLATFORM=offscreen qml6 tests/Harness.qml -- <outdir> [scenario]
-// Scenarios: open, idle, needs, toast, art (cover-tinted music card), steps, motion.
+// Scenarios: open, idle, needs, toast, art (cover-tinted music card), steps, motion,
+// many (a crowd of agent sessions, long names, a full row of buttons) and
+// many-toast.
 Window {
   id: win
   width: 1100
@@ -18,6 +20,22 @@ Window {
   readonly property string rawScenario: args.length > 0 ? args[args.length - 1] : "motion"
   readonly property bool light: rawScenario.indexOf("-light") !== -1
   readonly property string scenario: rawScenario.replace("-light", "")
+  readonly property bool many: scenario.indexOf("many") === 0
+  // A busy afternoon: every state, four agents, names too long for the card.
+  readonly property var crowd: {
+    var agents = ["claude", "codex", "claude", "opencode", "claude", "gemini", "claude"]
+    var names = ["Super shift C shortcut for the conversations window and its keyboard flow",
+      "Respond to greeting", "RAVN landing copy pass", "Fix the flaky payments webhook retries",
+      "Google Drive installation", "Write the release notes for 4.6", "Refactor the notch's hover timing",
+      "Buildr creator directory search", "Contextual teaser sky shader", "Birthday scrapbook PIN lock",
+      "Dock flares on every edge", "Translate the README", "Bump Hyprland and test the Lua config",
+      "Sort out the Telegram bot"]
+    var states = ["needs", "needs", "done", "working", "working", "working", "watching", "done", "idle", "idle", "idle", "idle", "idle", "idle"]
+    var list = []
+    for (var i = 0; i < names.length; i++)
+      list.push({ label: names[i], state: states[i], agent: agents[i % agents.length] })
+    return list
+  }
   Component.onCompleted: if (light) Theme.apply(({ mode: "light", accent: "#1e66f5", background: "#eff1f5", foreground: "#4c4f69", red: "#d20f39", yellow: "#df8e1d", green: "#40a02b", cyan: "#179299", blue: "#1e66f5", magenta: "#ea76cb", orange: "#fe640b" }))
 
   // A soft backdrop, so the black reads the way it will on a wallpaper.
@@ -37,12 +55,18 @@ Window {
     y: 0
     now: new Date(2026, 10, 12, 14, 41)
     status: ({ wifi: { kind: "wifi", strength: 0.8 }, battery: { present: true, level: 0.82, charging: false } })
-    alert: win.scenario === "toast" ? ({ title: "Claude needs you", detail: "Super shift C shortcut needs permission", session: null }) : null
+    alert: win.scenario === "toast" ? ({ title: "Claude needs you", detail: "Super shift C shortcut needs permission", session: null })
+      : win.scenario === "many-toast" ? ({ title: "OpenCode needs you", detail: "Fix the flaky payments webhook retries wants to run npm install --save-dev @types/node in ~/Projects/payments", session: null })
+      : null
     media: win.scenario === "idle" ? ({ available: false }) : ({
-      available: true, playing: true, title: "Glow", artist: "Echo", identity: "Spotify",
+      available: true, playing: true,
+      title: win.many ? "Progress? A Very Long Conversation About Shipping Things (Live at the Studio, Extended Cut)" : "Glow",
+      artist: win.many ? "Theo - t3.gg, Prime, and Friends of the Show" : "Echo", identity: "Spotify",
       artUrl: win.scenario === "art" ? "file:///usr/share/omarchy/themes/tokyo-night/preview.png" : "", position: 80, length: 215
     })
-    claude: win.scenario === "idle" ? ({ sessions: [], counts: {} }) : ({
+    claude: win.scenario === "idle" ? ({ sessions: [], counts: {} })
+      : win.many ? ({ sessions: win.crowd, counts: { needs: 2, done: 2, working: 3, watching: 1, idle: 6 } })
+      : ({
       counts: { needs: win.scenario === "needs" ? 1 : 0, working: 1, done: 1 },
       sessions: [
         { label: "Super shift C shortcut for conversations window", state: win.scenario === "needs" ? "needs" : "working" },
@@ -59,6 +83,7 @@ Window {
       }
       chip(0xF08C7, notch.menuSlot)
       var status = [0xF0F65, 0xF0E9F, 0xF00AF, 0xF05A9, 0xF057E, 0xF0379, 0xF0079, 0xF0590, 0xF0337]
+      if (win.many) status = status.concat([0xF0E9F, 0xF00AF, 0xF05A9, 0xF057E, 0xF0379, 0xF0079, 0xF0590, 0xF0337])
       for (var i = 0; i < status.length; i++) chip(status[i], notch.statusSlot)
       var tray = [0xF0E3D, 0xF069B, 0xF02D6]
       for (var j = 0; j < tray.length; j++) chip(tray[j], notch.traySlot)
@@ -112,9 +137,9 @@ Window {
       } else if (win.scenario === "motion") {
         notch.forceOpen = true
         frames.start()
-      } else if (win.scenario === "toast") {
+      } else if (win.scenario === "toast" || win.scenario === "many-toast") {
         openShot.start()
-      } else if (win.scenario === "open" || win.scenario === "idle" || win.scenario === "art") {
+      } else if (win.scenario === "open" || win.scenario === "idle" || win.scenario === "art" || win.scenario === "many") {
         notch.forceOpen = true
         openShot.start()
       } else {

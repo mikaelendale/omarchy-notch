@@ -23,9 +23,14 @@ Rectangle {
     return { agent: defaultAgent, state: "idle" }
   }
   // "Claude" when every session is Claude's, "Agents" when they're mixed.
+  function nameOf(session) {
+    if (session.agentName) return session.agentName
+    var id = String(session.agent || "claude")
+    return id.charAt(0).toUpperCase() + id.slice(1)
+  }
   readonly property string heading: {
     var names = {}
-    for (var i = 0; i < sessions.length; i++) names[sessions[i].agentName || "Claude"] = true
+    for (var i = 0; i < sessions.length; i++) names[nameOf(sessions[i])] = true
     var keys = Object.keys(names)
     return keys.length === 1 ? keys[0] : (keys.length === 0 ? "Agents" : "Agents")
   }
@@ -34,8 +39,12 @@ Rectangle {
   color: Theme.card
 
   Item {
+    id: inner
     anchors.fill: parent
     anchors.margins: 14
+    // As many sessions as the card has room for, most urgent first; the rest
+    // are counted on the Conversations button. It never scrolls.
+    readonly property int rowsFit: Math.max(1, Math.floor((height - header.height - 9 - 26 + 2) / 26))
 
     Row {
       id: header
@@ -77,7 +86,7 @@ Rectangle {
       }
 
       Repeater {
-        model: root.sessions.slice(0, 3)
+        model: root.sessions.slice(0, inner.rowsFit)
         SessionRow {
           width: parent.width
           session: modelData
@@ -99,7 +108,7 @@ Rectangle {
       Behavior on color { ColorAnimation { duration: 100 } }
       Text {
         anchors.centerIn: parent
-        text: root.sessions.length > 3 ? ("All conversations  ·  " + root.sessions.length + " open") : "Conversations"
+        text: root.sessions.length > inner.rowsFit ? ("All conversations  ·  " + root.sessions.length + " open") : "Conversations"
         textFormat: Text.PlainText
         color: Theme.text
         font.family: P.sans

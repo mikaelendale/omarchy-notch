@@ -22,7 +22,9 @@
   notch-look bell on|off           a terminal's bell marks its window as needing
                                    you, so agents other than Claude can say so
                                    (foot only)
-  notch-look dock frosted|plain    a frosted, rounded backing behind the dock's icons
+  notch-look dock frosted|plain    the dock in the notch's style, or Omarchy's own
+  notch-look preview               a minute of made-up agent sessions in the notch
+                                   (and the Claude sessions panel), to see it busy
 
 Every change is undone by the opposite command; nothing of Omarchy's own
 is touched. The files it manages:
@@ -128,8 +130,16 @@ CLONES = {
         "files": {"DockWindow.qml": [
             (
                 "  readonly property int iconSize: Math.round(36 * Style.fontScale)\n",
-                "  // notch-look: a little bigger.\n"
-                "  readonly property int iconSize: Math.round(40 * Style.fontScale)\n",
+                "  // notch-look: a little bigger, and smaller again when there are more\n"
+                "  // apps than the screen edge has room for, so the dock always fits.\n"
+                "  readonly property int iconSize: {\n"
+                "    var full = Math.round(40 * Style.fontScale)\n"
+                "    var slots = (window.dock && window.dock.itemModel ? window.dock.itemModel.count : 0) + 1\n"
+                "    var edge = window.screen ? (window.vertical ? window.screen.height : window.screen.width) : 0\n"
+                "    if (edge <= 0) return full\n"
+                "    var fit = Math.floor((edge - Style.space(160)) / slots) - 2 * window.iconInset\n"
+                "    return Math.max(Math.round(22 * Style.fontScale), Math.min(full, fit))\n"
+                "  }\n",
             ),
             (
                 "  readonly property int iconInset: Style.spacing.md\n",
@@ -736,6 +746,14 @@ def main(argv):
         set_bell(on_off(arg))
     elif cmd == "refresh":
         refresh_clones()
+        return 0
+    elif cmd == "preview":
+        code, _ = run("omarchy-shell", "mike.notch", "previewSessions")
+        if code != 0:
+            sys.exit("The notch isn't running; `notch-look bar on` first.")
+        run("omarchy-shell", "mike.claude-sessions", "preview", "14")
+        print("For a minute, the notch shows 14 made-up agent sessions: hover it to\n"
+              "see the agents card, and click its Claude button for the sessions panel.")
         return 0
     elif cmd == "dock":
         if arg not in ("frosted", "plain"):
