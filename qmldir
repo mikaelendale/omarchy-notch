@@ -1,6 +1,7 @@
 # Every component in this plugin (a qmldir makes the folder a module, so
-# each type is listed); Theme is the one singleton.
+# each type is listed); Theme and Motion are the singletons.
 singleton Theme 1.0 Theme.qml
+singleton Motion 1.0 Motion.qml
 Bar 1.0 Bar.qml
 BatteryIcon 1.0 BatteryIcon.qml
 BluetoothIcon 1.0 BluetoothIcon.qml
@@ -32,3 +33,4 @@ EditorChip 1.0 EditorChip.qml
 SystemCard 1.0 SystemCard.qml
 NotificationsCard 1.0 NotificationsCard.qml
 UnifiedStrip 1.0 UnifiedStrip.qml
+Flare 1.0 Flare.qml

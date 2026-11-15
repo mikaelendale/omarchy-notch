@@ -245,8 +245,27 @@ Item {
     onFileChanged: { reload(); themeColors.reload() }
   }
 
-  // ---- motion follows `omarchy toggle animations`
-  readonly property real motion: Style.duration(100) > 0 ? 1 : 0
+  // ---- motion: the editor's choice (Auto, Smooth, Light, Off). Auto picks
+  // Off when Omarchy's animations are off (`omarchy toggle animations`),
+  // Light on a modest machine (4 GB of memory or less, or 2 processor
+  // threads or fewer), and Smooth otherwise. Every animation reads Motion.
+  readonly property string motionChoice: ["smooth", "light", "off"].indexOf(String(prefs.motion)) !== -1 ? String(prefs.motion) : "auto"
+  property bool modestMachine: false
+  Process {
+    running: true
+    command: ["bash", "-c", "awk '/^MemTotal:/ {print $2}' /proc/meminfo; nproc"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var f = String(text).trim().split(/\s+/)
+        var memKb = Number(f[0]) || 0, cpus = Number(f[1]) || 0
+        root.modestMachine = (memKb > 0 && memKb <= 4.2 * 1024 * 1024) || (cpus > 0 && cpus <= 2)
+      }
+    }
+  }
+  readonly property string motionLevel: motionChoice !== "auto" ? motionChoice
+    : (Style.duration(100) <= 0 ? "off" : (modestMachine ? "light" : "smooth"))
+  Binding { target: Motion; property: "level"; value: root.motionLevel }
+  readonly property real motion: Motion.scale
 
   // ---- the time
   SystemClock {
@@ -286,11 +305,13 @@ Item {
   Timer {
     interval: 1000
     repeat: true
-    running: !!root.player && root.player.isPlaying
+    running: !!root.player && root.player.isPlaying && (root.openNotches > 0 || root.openCorners > 0)
     onTriggered: {
       if (root.player) root.player.positionChanged()
       root.mediaTick++
     }
+    // Opening a player: the right position at once, not a second later.
+    onRunningChanged: if (running) triggered()
   }
   readonly property var media: {
     var tick = mediaTick
@@ -446,7 +467,7 @@ Item {
   Process {
     id: sessions
     running: true
-    command: ["python3", "-I", "-B", root.agentsScript, "--interval", root.saving ? "3" : "1"]
+    command: ["python3", "-I", "-B", root.agentsScript, "--interval", root.lean ? "3" : "1"]
     stdout: SplitParser {
       onRead: function(line) {
         try {
@@ -798,7 +819,7 @@ Item {
     stdout: StdioCollector { onStreamFinished: root.readNet(text) }
   }
   Timer {
-    interval: root.saving ? 3000 : 1500
+    interval: root.lean ? 3000 : 1500
     repeat: true
     running: root.netNeeded
     triggeredOnStart: true
@@ -844,7 +865,7 @@ Item {
     stdout: StdioCollector { onStreamFinished: root.readSystem(text) }
   }
   Timer {
-    interval: root.openNotches > 0 ? (root.saving ? 5000 : 2000) : (root.saving ? 120000 : 30000)
+    interval: root.openNotches > 0 ? (root.lean ? 5000 : 2000) : (root.lean ? 120000 : 30000)
     repeat: true
     running: root.barLayout.cards.indexOf("system") !== -1
     triggeredOnStart: true
@@ -905,7 +926,7 @@ Item {
     stdout: StdioCollector { onStreamFinished: root.readPrivacy(text) }
   }
   Timer {
-    interval: root.saving ? 6000 : 3000
+    interval: root.lean ? 6000 : 3000
     repeat: true
     running: root.privacyNeeded
     triggeredOnStart: true
@@ -1105,8 +1126,11 @@ Item {
   // so less often (agents every 3 s instead of every second, the machine
   // every 5 s, the network every 3 s, the privacy dots every 6 s)
   readonly property bool saving: UPower.onBattery
+  // Lean: unplugged, or a modest machine (see motionLevel), plugged in or
+  // not: there every process the bar starts counts, so it checks less often.
+  readonly property bool lean: saving || modestMachine
   // A new interval needs a new agents.py; it restarts on its own after exiting.
-  onSavingChanged: sessions.running = false
+  onLeanChanged: sessions.running = false
 
   // ---- the volume (the corners' volume item and scroll)
   readonly property var sink: Pipewire.defaultAudioSink
@@ -1351,7 +1375,22 @@ Item {
       }
 
       anchors { top: true; left: true; right: true }
-      implicitHeight: Math.max(notch.implicitHeight + root.topGap, leftEar.implicitHeight, rightEar.implicitHeight) + 40
+      // Only as tall as the closed bar while nothing is open or moving: every
+      // repaint (a step of the music's bars, a working agent) repaints the
+      // whole window and Hyprland re-blurs it, so a short window keeps those
+      // cheap. It grows the moment something opens.
+      readonly property bool busy: notch.open || notch.progress > 0.001 || notch.alertProgress > 0.001
+        || leftEar.open || leftEar.progress > 0.001 || rightEar.open || rightEar.progress > 0.001
+        || win.summonHold || win.holdsPopout
+      // It stays tall a couple of seconds after closing, so hovering in and
+      // out doesn't make Hyprland hand over new buffers each time.
+      property bool roomyHold: false
+      onBusyChanged: if (busy) { roomyHold = true; roomyRelease.stop() } else roomyRelease.restart()
+      Timer { id: roomyRelease; interval: 2500; onTriggered: win.roomyHold = false }
+      readonly property bool roomy: busy || roomyHold
+      readonly property real fullHeight: Math.max(notch.implicitHeight + root.topGap, leftEar.implicitHeight, rightEar.implicitHeight) + 40
+      readonly property real compactHeight: Math.max(root.topGap, leftEar.inset) + notch.collapsedHeight + 14
+      implicitHeight: roomy ? fullHeight : compactHeight
       color: "transparent"
       // Full screen (the editor's switch): no reserved strip, every window
       // gets the whole screen and the notch sits over it like a camera notch,
@@ -1391,7 +1430,7 @@ Item {
       // stretches to the screen's edges while the notch or a corner is open,
       // so what opens hangs from one piece (UnifiedStrip.qml).
       property real stripT: root.unified && (notch.open || leftEar.open || rightEar.open) ? 1 : 0
-      Behavior on stripT { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+      Behavior on stripT { enabled: root.motion > 0; NumberAnimation { duration: win.stripT < 0.5 ? Motion.open : Motion.close; easing.type: Easing.OutCubic } }
       readonly property real stripGap: 10
       // How far in from the side the corners sit while the strip keeps its gap.
       readonly property real stripIn: root.unified ? (stripGap + 12) * (1 - stripT) : 0
@@ -1595,32 +1634,43 @@ Item {
       MouseArea { anchors.fill: parent; onClicked: root.editorOpen = false }
     }
 
-    Editor {
-      id: editor
+    // Built while it's open and let go when it closes: it's a big window
+    // that's rarely open, so it doesn't sit in memory the rest of the time.
+    Loader {
+      id: editorLoader
       anchors.centerIn: parent
-      layout: root.barLayout
-      buttons: root.editorButtons
-      status: root.status
-      media: root.media
-      now: clock.date
-      clockFormat: root.clockFormat
-      lead: root.lead
-      motion: root.motion
-      glass: root.glass
-      barStyle: root.barStyle
-      allAgents: root.allAgents
-      screens: root.screenChoices
-      cornerScreen: root.cornerScreenPresent ? root.cornerScreen : ""
-      fullScreen: root.windowsUnderNotch
-      onEdited: function(next) { root.setLayout(next) }
-      onButtonMoved: function(id, index) { root.moveButton(id, index) }
-      onGlassRequested: function(glass) { root.setPref("glass", glass) }
-      onStyleRequested: function(style) { root.setPref("notchStyle", style) }
-      onAllAgentsRequested: function(on) { root.setPref("allAgents", on) }
-      onCornerScreenRequested: function(name) { root.setPref("cornerScreen", name) }
-      onFullScreenRequested: function(on) { root.setPref("windowsUnderNotch", on) }
-      onCloseRequested: root.editorOpen = false
+      active: root.editorOpen
+      onLoaded: item.forceActiveFocus()
+      sourceComponent: Component {
+        Editor {
+          layout: root.barLayout
+          buttons: root.editorButtons
+          status: root.status
+          media: root.media
+          now: clock.date
+          clockFormat: root.clockFormat
+          lead: root.lead
+          motion: root.motion
+          glass: root.glass
+          barStyle: root.barStyle
+          allAgents: root.allAgents
+          motionChoice: root.motionChoice
+          motionLevel: root.motionLevel
+          screens: root.screenChoices
+          cornerScreen: root.cornerScreenPresent ? root.cornerScreen : ""
+          fullScreen: root.windowsUnderNotch
+          onEdited: function(next) { root.setLayout(next) }
+          onButtonMoved: function(id, index) { root.moveButton(id, index) }
+          onGlassRequested: function(glass) { root.setPref("glass", glass) }
+          onStyleRequested: function(style) { root.setPref("notchStyle", style) }
+          onAllAgentsRequested: function(on) { root.setPref("allAgents", on) }
+          onMotionRequested: function(choice) { root.setPref("motion", choice) }
+          onCornerScreenRequested: function(name) { root.setPref("cornerScreen", name) }
+          onFullScreenRequested: function(on) { root.setPref("windowsUnderNotch", on) }
+          onCloseRequested: root.editorOpen = false
+        }
+      }
     }
-    onVisibleChanged: if (visible) editor.forceActiveFocus()
+    onVisibleChanged: if (visible && editorLoader.item) editorLoader.item.forceActiveFocus()
   }
 }

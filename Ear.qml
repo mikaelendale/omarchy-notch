@@ -95,7 +95,7 @@ Item {
   readonly property real innerPad: 16     // toward the middle of the screen
   readonly property real collapsedTarget: Math.max(collapsedHeight + 12, closedRow.implicitWidth + edgePad + innerPad)
   property real collapsedWidth: collapsedTarget
-  Behavior on collapsedWidth { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+  Behavior on collapsedWidth { enabled: root.motion > 0; NumberAnimation { duration: Motion.close; easing.type: Easing.OutCubic } }
 
   readonly property real openPad: 14
   readonly property real expandedWidth: hasMedia ? 344 : 312
@@ -103,12 +103,12 @@ Item {
 
   // ---- motion: one number for being there at all, one for open
   property real presence: shown ? 1 : 0
-  Behavior on presence { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+  Behavior on presence { enabled: root.motion > 0; NumberAnimation { duration: Motion.open; easing.type: Easing.OutCubic } }
 
   property bool hoverOpen: false
   readonly property bool open: shown && canOpen && !holdClosed && (forceOpen || hoverOpen)
   property real progress: open ? 1 : 0
-  Behavior on progress { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+  Behavior on progress { enabled: root.motion > 0; NumberAnimation { duration: root.open ? Motion.open : Motion.close; easing.type: Easing.OutCubic } }
 
   function mix(a, b, t) { return a + (b - a) * t }
   function clamp01(v) { return Math.max(0, Math.min(1, v)) }

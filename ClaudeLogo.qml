@@ -22,7 +22,7 @@ Item {
   readonly property color tint: needs ? Theme.yellow : brand
   // How much of the mark the circle uncovers, 0 to 1 (1 = all of it).
   property real reveal: 1
-  readonly property bool revealing: working && !needs && motion > 0
+  readonly property bool revealing: working && !needs && motion > 0 && Motion.ambient
 
   width: size
   height: size
@@ -62,13 +62,32 @@ Item {
   }
 
   // In from nothing, a beat at full, back out, a beat at nothing.
-  SequentialAnimation {
-    running: root.revealing && root.visible
-    loops: Animation.Infinite
-    NumberAnimation { target: root; property: "reveal"; from: 0; to: 1; duration: 620; easing.type: Easing.OutCubic }
-    PauseAnimation { duration: 160 }
-    NumberAnimation { target: root; property: "reveal"; to: 0; duration: 520; easing.type: Easing.InOutCubic }
-    PauseAnimation { duration: 90 }
+  // The reveal, in steps on Motion's slow beat (sampled from the original
+  // curve: in over 620 ms, a beat at full, out over 520 ms, a beat at
+  // nothing) rather than every frame: each step repaints the bar's window and
+  // Hyprland re-blurs it, so a handful of steps a second keeps a working agent
+  // from keeping the whole bar busy.
+  readonly property var revealSteps: {
+    function outCubic(t) { return 1 - Math.pow(1 - t, 3) }
+    function inOutCubic(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2 }
+    var out = []
+    for (var ms = 0; ms < 1390; ms += Motion.beat) {
+      if (ms < 620) out.push(outCubic(ms / 620))
+      else if (ms < 780) out.push(1)
+      else if (ms < 1300) out.push(1 - inOutCubic((ms - 780) / 520))
+      else out.push(0)
+    }
+    return out
   }
-  onRevealingChanged: if (!revealing) reveal = 1
+  property int revealStep: 0
+  Timer {
+    running: root.revealing && root.visible
+    repeat: true
+    interval: Motion.beat
+    onTriggered: {
+      root.revealStep = (root.revealStep + 1) % root.revealSteps.length
+      root.reveal = root.revealSteps[root.revealStep]
+    }
+  }
+  onRevealingChanged: if (!revealing) { reveal = 1; revealStep = 0 }
 }

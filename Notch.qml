@@ -101,14 +101,14 @@ Item {
   // One number drives the whole morph, 0 closed to 1 open, so the slab's size,
   // its corners and the two layers of content can never drift apart.
   property real progress: open ? 1 : 0
-  // iOS-style: a stiff, critically damped spring: most of the way in about a
-  // tenth of a second, settled in a quarter, no bounce.
-  Behavior on progress { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+  // A short ease-out (Motion.open / Motion.close): quick off the mark and
+  // done, with no long spring tail repainting for nothing.
+  Behavior on progress { enabled: root.motion > 0; NumberAnimation { duration: root.open ? Motion.open : Motion.close; easing.type: Easing.OutCubic } }
 
   // The closed width follows what's live, easing as an activity comes or goes.
   readonly property real collapsedTarget: Math.max(132, collapsedRow.implicitWidth + 36)
   property real collapsedWidth: collapsedTarget
-  Behavior on collapsedWidth { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+  Behavior on collapsedWidth { enabled: root.motion > 0; NumberAnimation { duration: Motion.close; easing.type: Easing.OutCubic } }
 
   function mix(a, b, t) { return a + (b - a) * t }
   function clamp01(v) { return Math.max(0, Math.min(1, v)) }
@@ -117,7 +117,7 @@ Item {
   readonly property real alertWidth: 440
   readonly property real alertHeight: 74
   property real alertProgress: alertActive ? 1 : 0
-  Behavior on alertProgress { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+  Behavior on alertProgress { enabled: root.motion > 0; NumberAnimation { duration: Motion.open; easing.type: Easing.OutCubic } }
 
   readonly property real baseW: mix(collapsedWidth, alertWidth, alertProgress)
   readonly property real baseH: mix(collapsedHeight, alertHeight, alertProgress)

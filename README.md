@@ -170,7 +170,9 @@ Scroll over a corner (anywhere but the music and the workspaces) to change the v
 
 A corner with nothing to show hides. In full-screen mode, and while an app is fullscreen (Super+F), both corners hide and only the notch shows, holding their items. With more than one screen, the editor can keep the corners to one of them.
 
-**Saving battery:** unplugged, everything the bar checks on is checked less often: your agents every 3 seconds instead of every second, the machine every 5, the network every 3, the privacy dots every 6.
+**Light on any machine:** while nothing is open, the bar's window is only as tall as the closed bar, so anything that moves repaints (and Hyprland re-blurs) a sliver of the screen rather than a big window. Things that move on their own (the music's bars, an agent at work) step a few times a second instead of every frame. Opening and closing are short timed animations, and the notch, the corners and the unified bar are plain rounded rectangles with fixed curves where they meet an edge, so a frame only resizes rectangles, nothing is re-traced. The play position only updates while a player is open, and the editor is only built while it's open. With music playing and agents at work, that took the shell from about 29% of a CPU core at idle to 3%, and Hyprland from 26% to 4%.
+
+**Saving battery:** unplugged (and always on a modest machine, 4 GB of memory or less or 2 processor threads or fewer), everything the bar checks on is checked less often: your agents every 3 seconds instead of every second, the machine every 5, the network every 3, the privacy dots every 6.
 
 ## Editor
 
@@ -183,6 +185,7 @@ Right-click the notch or a corner (or run `notch-look edit`) to change everythin
 - **The open notch's cards:** System, Notifications, Music, Today and Agents, in any order, any of them off.
 - **The open notch's buttons:** Omarchy's buttons, reordered (through `omarchy bar move`).
 - **Frosted or Solid**, **Attached, Floating or Unified**, and **Full screen**.
+- **Motion:** **Smooth** (quick opening and closing; the music's bars and an agent at work move), **Light** (shorter opening and closing; nothing moves on its own; an agent at work shows a small green dot), or **Off** (no motion at all). **Auto**, the default, picks Light on a machine with 4 GB of memory or less or 2 processor threads or fewer, Off when Omarchy's animations are off, and Smooth otherwise.
 
 Changes apply as they land; **Reset** puts the defaults back. It's all saved in `~/.local/state/mike-notch/prefs.json`. What the editor does goes into the shell's log, prefixed `mike.notch editor:`.
 
@@ -210,6 +213,7 @@ It works on any edge: `omarchy dock position bottom|left|right|top`. `notch-look
 | `Ear.qml`, `EarShape.qml`, `MiniPlayer.qml`, `DetailRow.qml` | The corners: the pill, its shape, the music player and the detail rows |
 | `SystemCard.qml`, `NotificationsCard.qml` | The open notch's system and notifications cards |
 | `StatusItem.qml`, `Layout.js` | Every item the bar can show, drawn small; what goes where |
+| `Motion.qml`, `Flare.qml`, `UnifiedStrip.qml` | How much it moves (the one other singleton); the fixed curves where a body meets an edge; the unified bar |
 | `Players.js` | Finds the window that's playing, for a tap on the music |
 | `Editor.qml`, `EditorChip.qml` | The editor |
 | `MediaCard.qml`, `TodayCard.qml`, `ClaudeCard.qml`, `SessionRow.qml` | The open notch's cards |
@@ -218,7 +222,7 @@ It works on any edge: `omarchy dock position bottom|left|right|top`. `notch-look
 | `HSlider.qml` | The volume slider |
 | `AgentMark.qml` | Any agent's mark, with the growing-circle "working" reveal |
 | `agents.py`, `claude_sessions.py`, `bell.sh` | Every agent's sessions: Claude's and Codex's from their own session files, the rest from their terminals; the bell note |
-| `Theme.qml`, `qmldir` | Colours from the current Omarchy theme, light and dark (the one singleton; qmldir lists every type) |
+| `Theme.qml`, `qmldir` | Colours from the current Omarchy theme, light and dark (a singleton, like Motion; qmldir lists every type) |
 | `CoverArt.qml`, `EqBars.qml`, `Palette.js` | Shared pieces, fonts, the motion curve |
 | `look/surfaces.toml` | The frosted surfaces `notch-look surfaces on` puts into `shell.toml` |
 | `look/dock/` | The dock's glass, open-app dots, name labels and separator, copied into notch-look's copy of Omarchy's dock |

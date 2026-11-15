@@ -19,6 +19,9 @@ Item {
   property string glass: "frosted"          // "frosted" | "solid"
   property string barStyle: "attached"      // "attached" | "floating" | "unified"
   property bool allAgents: false             // every running agent in the closed notch
+  // Motion: the choice ("auto", "smooth", "light", "off") and what it comes to.
+  property string motionChoice: "auto"
+  property string motionLevel: "smooth"
   // Every screen ([{ id, name }]), and the one the corners show on ("" = all).
   property var screens: []
   property string cornerScreen: ""
@@ -37,6 +40,7 @@ Item {
   signal glassRequested(string glass)
   signal styleRequested(string style)
   signal allAgentsRequested(bool on)
+  signal motionRequested(string choice)
   signal cornerScreenRequested(string name)
   signal fullScreenRequested(bool on)
   signal closeRequested()
@@ -499,6 +503,43 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           on: root.allAgents
           onToggled: { root.log("every agent " + !root.allAgents); root.allAgentsRequested(!root.allAgents) }
+        }
+      }
+    }
+
+    // ---- motion: how much the bar moves (Auto picks for this machine)
+    Item {
+      width: parent.width
+      height: 40
+      Row {
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 12
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Motion"
+          textFormat: Text.PlainText
+          color: Theme.secondary
+          font.family: P.sans
+          font.pixelSize: 12
+          font.weight: Font.DemiBold
+        }
+        Segmented {
+          anchors.verticalCenter: parent.verticalCenter
+          options: [{ id: "auto", name: "Auto" }, { id: "smooth", name: "Smooth" }, { id: "light", name: "Light" }, { id: "off", name: "Off" }]
+          current: root.motionChoice
+          onPicked: function(id) { root.log("motion " + id); root.motionRequested(id) }
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: ({
+            smooth: "Quick opening and closing; music bars and working agents move",
+            light: "Shorter opening and closing; nothing moves on its own",
+            off: "No motion at all"
+          })[root.motionLevel] + (root.motionChoice === "auto" ? "  ·  picked for this machine" : "")
+          textFormat: Text.PlainText
+          color: Theme.tertiary
+          font.family: P.sans
+          font.pixelSize: 11
         }
       }
     }

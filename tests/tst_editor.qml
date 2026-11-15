@@ -301,6 +301,19 @@ Item {
       return Qt.createQmlObject('import QtQuick; Rectangle { objectName: "placed-' + id + '"; width: visible ? 40 : 0; height: 18; color: "teal" }', parentItem)
     }
   }
+  EqBars {
+    id: bars
+    x: 900
+    y: 960
+    playing: true
+  }
+  AgentMark {
+    id: workingMark
+    x: 940
+    y: 960
+    agent: "codex"
+    working: true
+  }
   StatusItem {
     id: marks
     x: 700
@@ -471,6 +484,30 @@ Item {
       compare(marks.agentGroups[1].count, 2, "two Claude sessions")
       marks.allAgents = false
       compare(marks.agentGroups.length, 0, "off: the single mark, as before")
+    }
+
+    function test_motion_levels() {
+      Motion.level = "smooth"
+      verify(workingMark.revealing, "smooth: an agent at work reveals")
+      var before = JSON.stringify(bars.levels)
+      tryVerify(function() { return JSON.stringify(bars.levels) !== before }, 1000, "smooth: the bars step")
+      Motion.level = "light"
+      verify(!workingMark.revealing, "light: nothing moves on its own")
+      compare(JSON.stringify(bars.levels), JSON.stringify(bars.restLevels), "light: the bars hold still")
+      var dot = null
+      for (var i = 0; i < workingMark.children.length; i++) if (workingMark.children[i].color === Theme.green && workingMark.children[i].radius > 0) dot = workingMark.children[i]
+      verify(dot && dot.visible, "light: a dot says it's at work")
+      compare(Motion.open, Math.round(180 * 0.6), "light: shorter opening")
+      Motion.level = "off"
+      compare(Motion.open, 0, "off: no motion")
+      ear.motion = Motion.scale
+      ear.media = ({ available: true, playing: true, title: "Song" })
+      ear.forceOpen = true
+      compare(ear.progress, 1, "off: it's open at once, no animation")
+      ear.forceOpen = false
+      compare(ear.progress, 0)
+      ear.motion = 1
+      Motion.level = "smooth"
     }
 
     function test_hides_when_nothing_plays() {
