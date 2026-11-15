@@ -17,6 +17,11 @@ Item {
   property var host: null
   property string screenName: ""
   property var window: null
+  // The notch's own buttons register, so shortcuts find them; a corner's
+  // hidden copy (there only to open its panel from the corner) doesn't.
+  property bool register: true
+  // Widgets to leave out of the row (their items show in a corner).
+  property var hiddenIds: []
 
   readonly property string widgetId: Util.canonicalWidgetId(String(modelData && modelData.id || ""))
   readonly property var registryComponent: {
@@ -41,7 +46,9 @@ Item {
 
   // A widget that hides itself (no updates waiting, nothing to indicate)
   // takes no room. Its own `visible` is read, so this item stays visible.
-  readonly property bool shown: !!loader.item && loader.item.visible && (custom || loader.item.implicitWidth > 0)
+  readonly property bool hiddenHere: (hiddenIds || []).indexOf(widgetId) !== -1
+  readonly property bool shown: !hiddenHere
+    && !!loader.item && loader.item.visible && (custom || loader.item.implicitWidth > 0)
   readonly property real chipWidth: custom ? (icon === "battery" ? ((st.battery || {}).charging ? 56 : 48) : 32) : Math.max(32, Math.ceil(loader.width) + 12)
 
   width: shown ? chipWidth + 6 : 0
@@ -134,7 +141,9 @@ Item {
     height: root.custom ? 32 : implicitHeight
     x: root.custom ? 0 : (root.chipWidth - width) / 2
     anchors.verticalCenter: parent.verticalCenter
-    opacity: root.custom ? 0 : 1
+    // Left out of the row: there, but invisible and out of the pointer's way.
+    opacity: root.custom || root.hiddenHere ? 0 : 1
+    enabled: !root.hiddenHere
     active: root.registryComponent !== null
     sourceComponent: root.registryComponent
     onLoaded: { root.inject(); Qt.callLater(root.inject) }
@@ -151,6 +160,6 @@ Item {
     if ("settings" in target) target.settings = host.entrySettings(modelData)
   }
   onModelDataChanged: inject()
-  Component.onCompleted: if (host) host.registerHost(root)
-  Component.onDestruction: if (host) host.unregisterHost(root)
+  Component.onCompleted: if (host && register) host.registerHost(root)
+  Component.onDestruction: if (host && register) host.unregisterHost(root)
 }

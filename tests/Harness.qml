@@ -9,7 +9,7 @@ import ".."
 // many-toast.
 Window {
   id: win
-  width: 1100
+  width: 1500
   height: 300
   visible: true
   color: "#d9d7d2"
@@ -52,8 +52,17 @@ Window {
   Notch {
     id: notch
     anchors.horizontalCenter: parent.horizontalCenter
-    y: 0
-    now: new Date(2026, 10, 12, 14, 41)
+    y: win.scenario === "float" ? 8 : 0
+    floating: win.scenario === "float"
+    now: new Date(1794743900 * 1000)
+    system: ({ ready: true, cpu: 0.23, memUsed: 7.4e9, memTotal: 15.4e9, diskUsed: 130e9, diskTotal: 510e9, temp: 59, uptime: 5 * 3600 + 12 * 60 })
+    cards: win.scenario === "four" ? ["system", "notifications", "agents", "media", "today"] : ["system", "notifications", "agents"]
+    notifications: [
+      { key: "1", app: "Telegram", glyph: "", summary: "Sam", body: "Are we still on for 7? I booked the place by the river", ts: 1794743800 },
+      { key: "2", app: "omarchy-action", glyph: String.fromCodePoint(0xF0A1C), summary: "Workspace layout set to tiling", body: "", ts: 1794740000 },
+      { key: "3", app: "Chrome", glyph: "", summary: "Build finished", body: "notch-dev: 26 tests passed", ts: 1794730000 },
+      { key: "4", app: "Slack", glyph: "", summary: "Design review", body: "Moved to Thursday", ts: 1794700000 }
+    ]
     status: ({ wifi: { kind: "wifi", strength: 0.8 }, battery: { present: true, level: 0.82, charging: false } })
     alert: win.scenario === "toast" ? ({ title: "Claude needs you", detail: "Super shift C shortcut needs permission", session: null })
       : win.scenario === "many-toast" ? ({ title: "OpenCode needs you", detail: "Fix the flaky payments webhook retries wants to run npm install --save-dev @types/node in ~/Projects/payments", session: null })
@@ -139,7 +148,7 @@ Window {
         frames.start()
       } else if (win.scenario === "toast" || win.scenario === "many-toast") {
         openShot.start()
-      } else if (win.scenario === "open" || win.scenario === "idle" || win.scenario === "art" || win.scenario === "many") {
+      } else if (win.scenario === "open" || win.scenario === "idle" || win.scenario === "art" || win.scenario === "many" || win.scenario === "four" || win.scenario === "float") {
         notch.forceOpen = true
         openShot.start()
       } else {

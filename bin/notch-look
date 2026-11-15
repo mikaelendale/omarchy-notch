@@ -5,7 +5,6 @@
   notch-look off                   everything back to stock Omarchy
   notch-look on                    everything on
   notch-look bar on|off            the notch bar, or Omarchy's own bar
-  notch-look side on|off           the side strip of icons
   notch-look round <px>|off        corner rounding for windows and pop-ups
                                    (14 is the notch look; off is Omarchy's square)
   notch-look surfaces on|off       frosted pop-ups, menus and notifications in
@@ -28,6 +27,12 @@
                                    keep the system monospace font
   notch-look preview               a minute of made-up agent sessions in the notch
                                    (and the Claude sessions panel), to see it busy
+  notch-look showcase              a minute and a half of made-up sessions,
+                                   notifications and privacy dots (and no network
+                                   name), for screenshots that show nothing of yours
+  notch-look edit                  choose what the two corners and the closed
+                                   notch show, and the order of the open notch's
+                                   buttons (or right-click the notch or a corner)
 
 Every change is undone by the opposite command; nothing of Omarchy's own
 is touched. The files it manages:
@@ -37,7 +42,7 @@ is touched. The files it manages:
   ~/.config/foot/foot.ini             (block between "notch-look: bell" markers)
   ~/.config/fontconfig/conf.d/10-notch-look.conf  (the shell's font)
   ~/.config/omarchy/shell.json        (bar.id, plugins, claude-sessions notify)
-  ~/.local/state/mike-notch/*.json    (side strip, preferences, the bar you had)
+  ~/.local/state/mike-notch/*.json    (preferences and the layout, the bar you had)
   ~/.config/omarchy/plugins/<you>.notifications, <you>.dock
                                       (copies of Omarchy's notifications and dock
                                        with a few lines changed; rebuilt from
@@ -60,7 +65,6 @@ SHELL_JSON = os.path.join(HOME, ".config/omarchy/shell.json")
 PLUGIN = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SURFACES = os.path.join(PLUGIN, "look/surfaces.toml")
 STATE = os.path.join(HOME, ".local/state/mike-notch")
-SIDE = os.path.join(STATE, "side.json")
 PREFS = os.path.join(STATE, "prefs.json")
 # The bar in use before `notch-look on`, put back by `notch-look off`.
 PREVIOUS = os.path.join(STATE, "previous.json")
@@ -336,18 +340,18 @@ BELL_START = "# notch-look: bell"
 BELL_END = "# notch-look: end bell"
 
 FROST_BLOCK = """-- notch-look: frost (managed by `notch-look surfaces on|off`)
--- Frosted glass behind the notch, the side strip, the dock, notifications and
+-- Frosted glass behind the notch and its corners, the dock, notifications and
 -- Omarchy's panels, using Omarchy's own glass blur (so `omarchy toggle
 -- animations`, which turns blur off on slow GPUs, still wins).
 require("default.hypr.glass")()
 hl.layer_rule({
-  match = { namespace = "^(mike-notch|mike-side-notch|omarchy-dock|omarchy-dock-apps|omarchy-notifications|omarchy-keyboard-panel|omarchy-osd|omarchy-reminders)$" },
+  match = { namespace = "^(mike-notch|omarchy-dock|omarchy-dock-apps|omarchy-notifications|omarchy-keyboard-panel|omarchy-osd|omarchy-reminders)$" },
   blur = true,
   ignore_alpha = 0.04,
 })
 -- Menus dim the screen behind them a little; only their card is frosted.
 hl.layer_rule({
-  match = { namespace = "^(omarchy-menu|omarchy-clipboard|omarchy-emojis)$" },
+  match = { namespace = "^(omarchy-menu|omarchy-clipboard|omarchy-emojis|mike-notch-editor)$" },
   blur = true,
   ignore_alpha = 0.5,
 })
@@ -533,21 +537,6 @@ def set_bar(on):
         code, out = run("omarchy", "bar", "use", "default")
     if code != 0:
         sys.exit(out.strip() or "omarchy bar use failed")
-
-
-# --------------------------------------------------------------- side strip
-
-def side_now():
-    return read_json(SIDE).get("hidden") is not True
-
-
-def set_side(on):
-    state = read_json(SIDE)
-    state["hidden"] = not on
-    # Tell the running notch, if it's up; otherwise the file is read at start.
-    code, _ = run("omarchy-shell", "mike.notch", "sideShow" if on else "sideHide")
-    if code != 0:
-        write(SIDE, json.dumps(state) + "\n")
 
 
 # --------------------------------------------------------------- Claude toasts
@@ -742,7 +731,6 @@ def status():
     current = current.get("id") if isinstance(current, dict) else None
     rows = [
         ("bar", "notch" if bar else (current or "Omarchy's own")),
-        ("side", ("on" if side_now() else "off") + later),
         ("round", f"{r}px" if r else "off (square)"),
         ("surfaces", "frosted" if surfaces_now() else "theme's own"),
         ("claude-toasts", "in the notch" if toasts_now() else "desktop notifications"),
@@ -794,14 +782,11 @@ def main(argv):
         set_toasts(True)
         set_font(True, restart=False)
         set_bar(True)
-        set_side(True)
         set_clone("dock", True, restart=False)
         set_notifications(True)
         print("Notch look on.")
     elif cmd == "bar":
         set_bar(on_off(arg))
-    elif cmd == "side":
-        set_side(on_off(arg))
     elif cmd == "round":
         if arg in ("off", "0", "none"):
             set_rounding(0)
@@ -831,6 +816,18 @@ def main(argv):
         run("omarchy-shell", "mike.claude-sessions", "preview", "14")
         print("For a minute, the notch shows 14 made-up agent sessions: hover it to\n"
               "see the agents card, and click its Claude button for the sessions panel.")
+        return 0
+    elif cmd == "showcase":
+        code, _ = run("omarchy-shell", "mike.notch", "showcase")
+        if code != 0:
+            sys.exit("The notch isn't running; `notch-look bar on` first.")
+        print("For a minute and a half the notch shows made-up sessions, notifications\n"
+              "and privacy dots, and no network name: take your screenshots.")
+        return 0
+    elif cmd == "edit":
+        code, _ = run("omarchy-shell", "mike.notch", "edit")
+        if code != 0:
+            sys.exit("The notch isn't running; `notch-look bar on` first.")
         return 0
     elif cmd == "dock":
         if arg not in ("frosted", "plain"):

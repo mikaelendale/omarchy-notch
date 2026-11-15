@@ -11,6 +11,8 @@ import Quickshell.Bluetooth
 import QtQuick
 import qs.Commons
 import "Palette.js" as P
+import "Layout.js" as Layout
+import "Players.js" as Players
 
 // A replacement for Omarchy's bar (kind "bar"): one notch per screen.
 //
@@ -157,6 +159,16 @@ Item {
   // Keyboard shortcuts and `omarchy-shell shell toggle <panel>` land here.
   // The notch opens first, so the panel hangs from the widget where it shows.
   function summonBarWidget(id) {
+    // A widget whose item sits in a corner opens its panel from there.
+    var focused = focusedScreenName()
+    var wins = notches.instances
+    for (var w = 0; w < wins.length; w++) {
+      var win = wins[w]
+      if (!win || (wins.length > 1 && win.screenName !== focused)) continue
+      var corner = win.cornerFor(String(id || ""))
+      if (corner) { win.openFromCorner(corner, String(id)); return true }
+      break
+    }
     var host = findHost(String(id || ""))
     if (!host || !host.item || typeof host.item.open !== "function") return false
     host.window.summon(host.item)
@@ -244,8 +256,23 @@ Item {
 
   // ---- what's playing
   readonly property var players: Mpris.players ? Mpris.players.values : []
+  // The player chosen in the music corner (its "switch" button), by D-Bus
+  // name; until then, or once it's gone, the one playing.
+  property string preferredPlayerKey: ""
+  function playerKey(p) { return p ? String(p.dbusName || p.identity || "") : "" }
+  // A new player turning up hands the choice back to whichever plays.
+  property int playerCount: 0
+  onPlayersChanged: {
+    if (players.length > playerCount) preferredPlayerKey = ""
+    playerCount = players.length
+  }
+  readonly property var playerChoices: players.filter(function(p) {
+    return p && (p.isPlaying || p.trackTitle || p.trackArtist)
+  }).map(function(p) { return { key: root.playerKey(p), name: String(p.identity || "Player") } })
   readonly property var player: {
     var list = players
+    if (preferredPlayerKey)
+      for (var k = 0; k < list.length; k++) if (list[k] && playerKey(list[k]) === preferredPlayerKey) return list[k]
     var fallback = null
     for (var i = 0; i < list.length; i++) {
       var p = list[i]
@@ -269,6 +296,7 @@ Item {
     var tick = mediaTick
     var p = player
     if (!p) return ({ available: false })
+    var minRate = Number(p.minRate || 1), maxRate = Number(p.maxRate || 1)
     return {
       available: true,
       playing: !!p.isPlaying,
@@ -277,15 +305,79 @@ Item {
       artUrl: p.trackArtUrl || "",
       identity: p.identity || "",
       position: p.positionSupported ? p.position : 0,
-      length: p.lengthSupported ? p.length : 0
+      length: p.lengthSupported ? p.length : 0,
+      canSeek: !!p.canSeek && !!p.positionSupported,
+      canNext: !!p.canGoNext,
+      canPrevious: !!p.canGoPrevious,
+      canRaise: !!p.canRaise,
+      shuffleSupported: !!p.shuffleSupported,
+      shuffle: !!p.shuffle,
+      loopSupported: !!p.loopSupported,
+      loop: p.loopState === MprisLoopState.Track ? "track" : (p.loopState === MprisLoopState.Playlist ? "playlist" : "none"),
+      rateSupported: maxRate > 1.001 || minRate < 0.999,
+      rate: Number(p.rate || 1),
+      minRate: minRate,
+      maxRate: maxRate,
+      players: playerChoices,
+      playerKey: playerKey(p)
     }
   }
-  function mediaAction(action) {
+  function mediaAction(action, value) {
     var p = player
     if (!p) return
     if (action === "toggle" && p.canTogglePlaying) p.togglePlaying()
     else if (action === "next" && p.canGoNext) p.next()
     else if (action === "previous" && p.canGoPrevious) p.previous()
+    else if (action === "seek" && p.canSeek) {
+      var to = Math.max(0, Number(value) || 0)
+      if (p.lengthSupported && p.length > 0) to = Math.min(to, p.length - 0.5)
+      p.position = to
+      mediaTick++
+    }
+    else if (action === "shuffle" && p.shuffleSupported) p.shuffle = !!value
+    else if (action === "loop" && p.loopSupported)
+      p.loopState = value === "track" ? MprisLoopState.Track : (value === "playlist" ? MprisLoopState.Playlist : MprisLoopState.None)
+    else if (action === "rate") p.rate = Number(value) || 1
+    else if (action === "raise") raisePlayer()
+    else if (action === "switchPlayer") {
+      var choices = playerChoices
+      if (choices.length < 2) return
+      var at = 0
+      for (var i = 0; i < choices.length; i++) if (choices[i].key === playerKey(p)) at = i
+      preferredPlayerKey = choices[(at + 1) % choices.length].key
+    }
+  }
+
+  // ---- go to the window that's playing. A player that can raise itself
+  // does; most can't (Chrome, and so YouTube, can't), so the window is found
+  // by its title holding the track's title (a YouTube tab or app window
+  // does), else by the player's app, and focused.
+  function raisePlayer() {
+    var p = player
+    if (!p) return
+    if (p.canRaise) { p.raise(); return }
+    raiseProbe.track = String(p.trackTitle || "")
+    raiseProbe.app = String(p.desktopEntry || p.identity || "")
+    raiseProbe.focus = true
+    if (!raiseProbe.running) raiseProbe.running = true
+  }
+  property string lastPlayerWindow: ""
+  Process {
+    id: raiseProbe
+    property string track: ""
+    property string app: ""
+    property bool focus: true
+    command: ["hyprctl", "clients", "-j"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var clients = []
+        try { clients = JSON.parse(text) } catch (e) {}
+        var win = Players.windowFor(clients, raiseProbe.track, raiseProbe.app)
+        root.lastPlayerWindow = JSON.stringify(win)
+        if (raiseProbe.focus && win && /^0x[0-9a-fA-F]+$/.test(win.address))
+          Hyprland.dispatch('hl.dsp.focus({ window = "address:' + win.address + '" })')
+      }
+    }
   }
 
   // ---- Every coding agent's sessions (agents.py): Claude Code from the
@@ -354,7 +446,7 @@ Item {
   Process {
     id: sessions
     running: true
-    command: ["python3", "-I", "-B", root.agentsScript]
+    command: ["python3", "-I", "-B", root.agentsScript, "--interval", root.saving ? "3" : "1"]
     stdout: SplitParser {
       onRead: function(line) {
         try {
@@ -401,12 +493,11 @@ Item {
     printErrors: false
     onFileChanged: reload()
     onLoaded: {
-      try {
-        var rows = JSON.parse(text())
-        root.notificationsShowing = Array.isArray(rows) && rows.length > 0
-      } catch (e) { root.notificationsShowing = false }
+      var rows = root.readRows(text())
+      root.notifLive = rows
+      root.notificationsShowing = rows.length > 0
     }
-    onLoadFailed: root.notificationsShowing = false
+    onLoadFailed: { root.notificationsShowing = false; root.notifLive = [] }
   }
 
   // ---- "Claude needs you" toasts, in the notch
@@ -499,19 +590,80 @@ Item {
     function toggle(): void { root.pinned = !root.pinned }
     function open(): void { root.pinned = true }
     function close(): void { root.pinned = false }
-    // Show or hide the side notch.
-    function side(): void { root.saveSide(root.sideWith({ hidden: !root.side.hidden })) }
-    function sideShow(): void { root.saveSide(root.sideWith({ hidden: false })) }
     // Full screen (windows under the notch) or the notch's own strip.
     function screen(): void { root.setPref("windowsUnderNotch", !root.windowsUnderNotch) }
-    function sideHide(): void { root.saveSide(root.sideWith({ hidden: true })) }
-    // What the side strip thinks is going on (for testing).
-    function sideState(): string { return sideNotch.debugState() }
     // Show what a "Claude needs you" toast looks like.
     function previewSessions(): void { root.previewSessions() }
     // The family Omarchy's "monospace" resolves to in this shell (for testing
     // `notch-look font`).
     function fontCheck(): string { return fontProbe.fontInfo.family }
+    // The top bar's editor.
+    function edit(): void { root.openEditor() }
+    // Open (or close) a corner's panel on the focused screen as a click on
+    // its row does (for testing): wifi, bluetooth, battery or volume.
+    function cornerPanel(id: string): string {
+      var widgetId = root.cornerPanels[id]
+      if (!widgetId) return "no panel for " + id
+      var list = notches.instances
+      var name = root.focusedScreenName()
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i]
+        if (!w || (list.length > 1 && w.screenName !== name)) continue
+        var ear = w.rightCorner.items.indexOf(id) !== -1 ? w.rightCorner : w.leftCorner
+        w.openFromCorner(ear, widgetId)
+        return ear.side + " corner on " + w.screenName
+      }
+      return "no screen"
+    }
+    // Which window a tap on the music would go to, without going (for
+    // testing; the answer lands a moment later: run it twice).
+    function playerWindow(): string {
+      var p = root.player
+      if (!p) return "no player"
+      raiseProbe.track = String(p.trackTitle || "")
+      raiseProbe.app = String(p.desktopEntry || p.identity || "")
+      raiseProbe.focus = false
+      if (!raiseProbe.running) raiseProbe.running = true
+      return root.lastPlayerWindow || "looking"
+    }
+    // What the bar sees (for testing).
+    function privacyState(): string { return JSON.stringify(root.privacy) }
+    function notificationsState(): string { return JSON.stringify(root.notifications.slice(0, 3)) }
+    function workspacesState(): string {
+      var out = []
+      var list = notches.instances
+      for (var i = 0; i < list.length; i++) out.push({ screen: list[i].screenName, dots: list[i].wsDots })
+      return JSON.stringify(out)
+    }
+    // Made-up sessions, notifications and privacy dots, and no network name,
+    // for a minute and a half: for screenshots.
+    function showcase(): void { root.previewSessions(); root.showcase = true; showcaseEnd.restart() }
+    function showcaseEnd(): void { root.showcase = false; root.showCornerSide = ""; root.showcaseStyle = "" }
+    // The showcase attached or floating ("attached", "floating", or "" for yours).
+    function showcaseStyle(style: string): void { root.showcaseStyle = style }
+    // Hold a corner open ("left", "right" or "" for neither), for screenshots.
+    function showCorner(side: string): void { root.showCornerSide = side; if (side) showcaseEnd.restart() }
+    // A low-battery warning, to see it.
+    function previewLowBattery(): void { root.lowBatteryAlert = true; lowBatteryEnd.restart() }
+    // Where things stand (for testing).
+    function cornersState(): string {
+      var out = []
+      var list = notches.instances
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i]
+        out.push({ screen: w.screenName, cornersOn: w.cornersOn, fullscreen: w.fullscreenHere,
+          left: w.leftCorner.shown, right: w.rightCorner.shown, notchItems: w.notchItems,
+          holdsPopout: w.holdsPopout, rightHeld: w.rightCorner.holdClosed })
+      }
+      return JSON.stringify({ glass: root.glass, solid: Theme.solid, popout: !!root.activePopout, screens: out })
+    }
+    // The network speed the bar sees (for testing; keeps it measuring 10 s).
+    function netState(): string {
+      root.netWatch = true
+      netWatchEnd.restart()
+      return JSON.stringify({ iface: root.netInterface, down: Math.round(root.netRates.down), up: Math.round(root.netRates.up) })
+    }
+    function editClose(): void { root.editorOpen = false }
     function previewToast(): void {
       root.alert = { title: "Claude needs you", detail: "This is what a waiting session looks like", session: null }
       alertTimer.restart()
@@ -551,14 +703,16 @@ Item {
     if (wifiDevice && wifiDevice.connected) {
       var nets = wifiDevice.networks ? wifiDevice.networks.values : []
       var strength = 1
+      var name = ""
       for (var i = 0; i < nets.length; i++) {
         if (nets[i] && nets[i].connected) {
           var raw = Number(nets[i].signalStrength || 0)
           strength = raw > 1 ? raw / 100 : raw
+          name = String(nets[i].name || "")
           break
         }
       }
-      return { kind: "wifi", strength: strength }
+      return { kind: "wifi", strength: strength, name: name }
     }
     return { kind: "none", strength: 0, enabled: !!Networking.wifiEnabled }
   }
@@ -568,20 +722,31 @@ Item {
     var level = Number(d.percentage || 0)
     if (level > 1) level = level / 100
     var charging = d.state === UPowerDeviceState.Charging || (d.state === UPowerDeviceState.FullyCharged && !UPower.onBattery)
-    return { present: true, level: level, charging: charging }
+    return {
+      present: true, level: level, charging: charging,
+      full: d.state === UPowerDeviceState.FullyCharged || (!UPower.onBattery && level >= 0.995),
+      timeToEmpty: Number(d.timeToEmpty || 0),
+      timeToFull: Number(d.timeToFull || 0)
+    }
   }
   readonly property var bluetoothStatus: {
     var adapter = Bluetooth.defaultAdapter
     var devices = Bluetooth.devices ? Bluetooth.devices.values : []
     var connected = false
-    for (var i = 0; i < devices.length; i++) if (devices[i] && devices[i].connected) { connected = true; break }
-    return { enabled: !!(adapter && adapter.enabled), connected: connected }
+    var device = ""
+    for (var i = 0; i < devices.length; i++) if (devices[i] && devices[i].connected) {
+      connected = true
+      device = String(devices[i].name || devices[i].deviceName || "")
+      break
+    }
+    return { enabled: !!(adapter && adapter.enabled), connected: connected, device: device }
   }
   readonly property var status: ({
     wifi: wifiStatus,
     battery: batteryStatus,
     bluetooth: bluetoothStatus,
     volume: { level: volume, muted: muted },
+    net: netRates,
     claude: {
       working: (claude.counts.working || 0) + (claude.counts.watching || 0),
       needs: claude.counts.needs || 0,
@@ -591,93 +756,364 @@ Item {
     usage: usage
   })
 
-  // ---- the side notch's data
-  readonly property var notifService: shell && typeof shell.firstPartyServiceFor === "function" ? shell.firstPartyServiceFor("omarchy.notifications") : null
-  readonly property var idleService: shell && typeof shell.firstPartyServiceFor === "function" ? shell.firstPartyServiceFor("omarchy.idle") : null
-  readonly property var nightService: shell && typeof shell.firstPartyServiceFor === "function" ? shell.firstPartyServiceFor("omarchy.nightlight") : null
+  // ---- how fast the network is going, from /proc/net/dev: only while
+  // something shows it (the speed item, or an open corner with Wi-Fi in it)
+  property var netRates: ({ down: 0, up: 0 })
+  property var netLast: null
+  property int openCorners: 0
+  readonly property bool netNeeded: {
+    var l = barLayout
+    var all = [].concat(l.left, l.center, l.right)
+    return all.indexOf("speed") !== -1 || openCorners > 0 || netWatch
+  }
+  // `omarchy-shell mike.notch netState` (for testing): watch for ten seconds.
+  property bool netWatch: false
+  Timer { id: netWatchEnd; interval: 10000; onTriggered: root.netWatch = false }
+  onNetNeededChanged: if (!netNeeded) { netLast = null; netRates = ({ down: 0, up: 0 }) }
+  readonly property string netInterface: {
+    var d = wiredDevice && wiredDevice.connected ? wiredDevice : (wifiDevice && wifiDevice.connected ? wifiDevice : null)
+    return d && d.name ? String(d.name) : ""
+  }
+  function readNet(text) {
+    var rx = 0, tx = 0
+    var lines = String(text || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/^\s*([^:\s]+):\s*(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)/)
+      if (!m) continue
+      var name = m[1]
+      if (netInterface ? name !== netInterface : /^(lo|docker|veth|br-|virbr|vnet|tailscale|wg|tun)/.test(name)) continue
+      rx += Number(m[2])
+      tx += Number(m[3])
+    }
+    var now = Date.now()
+    if (netLast && now > netLast.at) {
+      var dt = (now - netLast.at) / 1000
+      netRates = { down: Math.max(0, (rx - netLast.rx) / dt), up: Math.max(0, (tx - netLast.tx) / dt) }
+    }
+    netLast = { at: now, rx: rx, tx: tx }
+  }
+  Process {
+    id: netProbe
+    command: ["cat", "/proc/net/dev"]
+    stdout: StdioCollector { onStreamFinished: root.readNet(text) }
+  }
+  Timer {
+    interval: root.saving ? 3000 : 1500
+    repeat: true
+    running: root.netNeeded
+    triggeredOnStart: true
+    onTriggered: if (!netProbe.running) netProbe.running = true
+  }
 
+  // ---- the machine, for the open notch's system card: the processor, memory,
+  // disk and heat, every 2 s while a notch is open (every 30 s otherwise, so
+  // it opens with recent numbers)
+  property var system: ({ ready: false })
+  property var cpuLast: null
+  property int openNotches: 0
+  function readSystem(text) {
+    var next = { ready: true, cpu: system.cpu || 0, memUsed: 0, memTotal: 0, diskUsed: 0, diskTotal: 0, temp: -1, uptime: 0 }
+    var temps = ({})
+    var lines = String(text || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var f = lines[i].trim().split(/\s+/)
+      if (f[0] === "cpu") {
+        var total = 0
+        for (var k = 1; k < f.length; k++) total += Number(f[k]) || 0
+        var idle = (Number(f[4]) || 0) + (Number(f[5]) || 0)
+        if (cpuLast && total > cpuLast.total) next.cpu = Math.max(0, Math.min(1, 1 - (idle - cpuLast.idle) / (total - cpuLast.total)))
+        cpuLast = { total: total, idle: idle }
+      }
+      else if (f[0] === "MemTotal:") next.memTotal = Number(f[1]) * 1024
+      else if (f[0] === "MemAvailable:") next.memAvail = Number(f[1]) * 1024
+      else if (f[0] === "disk") { next.diskTotal = Number(f[1]) || 0; next.diskUsed = Number(f[2]) || 0 }
+      else if (f[0] === "temp" && f.length >= 3) temps[f[1]] = Number(f[2]) / 1000
+      else if (f[0] === "up") next.uptime = Number(f[1]) || 0
+    }
+    next.memUsed = Math.max(0, next.memTotal - (next.memAvail || 0))
+    var order = ["x86_pkg_temp", "TCPU", "cpu_thermal", "k10temp", "coretemp", "acpitz"]
+    for (var j = 0; j < order.length; j++) if (temps[order[j]] > 0) { next.temp = temps[order[j]]; break }
+    system = next
+  }
+  Process {
+    id: systemProbe
+    command: ["bash", "-c", "head -1 /proc/stat; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; "
+      + "df -B1 --output=size,used / | tail -1 | sed 's/^/disk /'; "
+      + "for z in /sys/class/thermal/thermal_zone*; do echo \"temp $(cat $z/type 2>/dev/null) $(cat $z/temp 2>/dev/null)\"; done; "
+      + "echo \"up $(cut -d' ' -f1 /proc/uptime)\""]
+    stdout: StdioCollector { onStreamFinished: root.readSystem(text) }
+  }
+  Timer {
+    interval: root.openNotches > 0 ? (root.saving ? 5000 : 2000) : (root.saving ? 120000 : 30000)
+    repeat: true
+    running: root.barLayout.cards.indexOf("system") !== -1
+    triggeredOnStart: true
+    onTriggered: if (!systemProbe.running) systemProbe.running = true
+  }
+  // Opening a notch: fresh numbers at once.
+  onOpenNotchesChanged: if (openNotches > 0 && !systemProbe.running) systemProbe.running = true
+
+  // ---- how it looks: frosted (the default) or solid, for the notch and the
+  // corners
+  readonly property string glass: prefs.glass === "solid" ? "solid" : "frosted"
+  // Attached to the top edge (the default), or floating a little below it,
+  // for the notch and the corners alike.
+  readonly property bool floating: showcase && showcaseStyle ? showcaseStyle === "floating" : prefs.notchStyle === "floating"
+  // The showcase's own attached or floating ("" = yours).
+  property string showcaseStyle: ""
+  readonly property real topGap: floating ? 8 : 0
+  Binding { target: Theme; property: "solid"; value: root.glass === "solid" }
+
+  // ---- privacy dots: the microphone (orange), the camera (green) and a
+  // screen recording (red), while something uses them. Checked every 3 s,
+  // only while the privacy item is on the bar.
+  property var privacy: ({ mic: false, camera: false, screen: false, micApps: "", cameraApp: "" })
+  readonly property bool privacyNeeded: {
+    var l = barLayout
+    return [].concat(l.left, l.center, l.right).indexOf("privacy") !== -1
+  }
+  onPrivacyNeededChanged: if (!privacyNeeded) privacy = ({ mic: false, camera: false, screen: false, micApps: "", cameraApp: "" })
+  function readPrivacy(text) {
+    var next = { mic: false, camera: false, screen: false, micApps: "", cameraApp: "" }
+    var lines = String(text || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i]
+      if (line.indexOf("mic ") === 0) { next.micApps = line.slice(4).trim(); next.mic = next.micApps.length > 0 }
+      else if (line.indexOf("cam ") === 0) { next.camera = true; next.cameraApp = line.slice(4).trim() }
+      else if (line === "rec") next.screen = true
+    }
+    privacy = next
+  }
+  Process {
+    id: privacyProbe
+    command: ["bash", "-c",
+      // Apps recording from a microphone (not the shell's own level meters).
+      "pactl -f json list source-outputs 2>/dev/null | jq -r '[.[] | .properties | select(((.\"application.process.binary\" // \"\") | test(\"^(quickshell|qs|pavucontrol|wireplumber|pipewire)$\")) | not) | (.\"application.name\" // .\"application.process.binary\" // \"An app\")] | unique | join(\", \") | \"mic \" + .' 2>/dev/null; "
+      // A camera held open by any process of yours.
+      + "f=$(find /proc/[0-9]*/fd -lname '/dev/video*' -print -quit 2>/dev/null); "
+      + "[ -n \"$f\" ] && echo \"cam $(cat /proc/$(echo $f | cut -d/ -f3)/comm 2>/dev/null)\"; "
+      // Omarchy's own screen recording.
+      + "omarchy-capture-screenrecording --status >/dev/null 2>&1 && echo rec; true"]
+    stdout: StdioCollector { onStreamFinished: root.readPrivacy(text) }
+  }
+  Timer {
+    interval: root.saving ? 6000 : 3000
+    repeat: true
+    running: root.privacyNeeded
+    triggeredOnStart: true
+    onTriggered: if (!privacyProbe.running) privacyProbe.running = true
+  }
+
+  // ---- notification history: what Omarchy's notifications showed (it keeps
+  // them in history.json, the ones still up in live.json), newest first, for
+  // the open notch's notifications card. Clear hides what's there now.
+  property var notifHistory: []
+  property var notifLive: []
+  function readRows(text) {
+    try { var rows = JSON.parse(text); return Array.isArray(rows) ? rows : [] } catch (e) { return [] }
+  }
+  FileView {
+    path: root.home + "/.local/state/omarchy/notifications/history.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.notifHistory = root.readRows(text())
+    onLoadFailed: root.notifHistory = []
+  }
+  readonly property real notificationsClearedAt: Number(prefs.notificationsClearedAt || 0)
+  // `omarchy-shell mike.notch showcase` (or `notch-look showcase`): a minute
+  // and a half of made-up sessions, notifications and privacy dots, and no
+  // network name, for screenshots that show nothing of yours.
+  property bool showcase: false
+  Timer { id: showcaseEnd; interval: 90000; onTriggered: { root.showcase = false; root.showCornerSide = ""; root.showcaseStyle = "" } }
+  readonly property var showcaseNotifications: {
+    var now = Date.now() / 1000
+    return [
+      { key: "s1", app: "Telegram", glyph: "", summary: "Sam", body: "Are we still on for 7? I booked the place by the river", ts: now - 60, live: false },
+      { key: "s2", app: "Calendar", glyph: String.fromCodePoint(0xF00ED), summary: "Design review in 10 minutes", body: "Room 3 · with Alex and Priya", ts: now - 900, live: false },
+      { key: "s3", app: "Claude", glyph: "", summary: "Claude needs you", body: "Refactor the notch hover timing needs permission", ts: now - 2400, live: false },
+      { key: "s4", app: "omarchy-action", glyph: String.fromCodePoint(0xF0A1C), summary: "Screen recording saved", body: "0:42 · 6.1 MB", ts: now - 5400, live: false },
+      { key: "s5", app: "Spotify", glyph: "", summary: "Now playing", body: "Lose My Mind", ts: now - 7200, live: false },
+      { key: "s6", app: "Mail", glyph: "", summary: "Invoice #1042", body: "Paid, thank you", ts: now - 86000, live: false }
+    ]
+  }
+  readonly property var notifications: showcase ? showcaseNotifications : realNotifications
+  // The side a corner is held open on for screenshots ("left" | "right").
+  property string showCornerSide: ""
+  readonly property var realNotifications: {
+    var seen = ({})
+    var out = []
+    var all = [].concat(notifLive, notifHistory)
+    for (var i = 0; i < all.length; i++) {
+      var r = all[i]
+      if (!r || !r.key || seen[r.key]) continue
+      seen[r.key] = true
+      var ts = Number(r.ts || 0)
+      if (ts <= notificationsClearedAt) continue
+      out.push({
+        key: String(r.key),
+        app: String(r.app || r.source || ""),
+        glyph: String(r.glyph || ""),
+        summary: String(r.summary || ""),
+        body: String(r.body || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim(),
+        ts: ts,
+        live: !r.closed_ts
+      })
+    }
+    out.sort(function(a, b) { return b.ts - a.ts })
+    return out.slice(0, 40)
+  }
+  function clearNotifications() { setPref("notificationsClearedAt", Date.now() / 1000) }
+  function showAllNotifications() { Quickshell.execDetached(["omarchy-shell", "notifications", "showHistory"]) }
+
+  // ---- low battery: crossing 15% (and 5%) unplugged, the corner holding
+  // the battery opens for a few seconds, red
+  property real lastBatteryLevel: -1
+  property bool lowBatteryAlert: false
+  onBatteryStatusChanged: {
+    var b = batteryStatus
+    if (!b || !b.present) return
+    var level = Number(b.level || 0)
+    var was = lastBatteryLevel
+    if (!b.charging && was > 0 && ((was > 0.15 && level <= 0.15) || (was > 0.05 && level <= 0.05))) {
+      lowBatteryAlert = true
+      lowBatteryEnd.restart()
+    }
+    if (b.charging) lowBatteryAlert = false
+    lastBatteryLevel = level
+  }
+  Timer { id: lowBatteryEnd; interval: 6000; onTriggered: root.lowBatteryAlert = false }
+
+  // ---- which screens get the corners: every one (""), or just one
+  readonly property string cornerScreen: String(prefs.cornerScreen || "")
+  readonly property bool cornerScreenPresent: {
+    var list = Quickshell.screens
+    for (var i = 0; i < list.length; i++) if (list[i].name === cornerScreen) return true
+    return false
+  }
+  // For the editor: each screen, by a name people know it by.
+  readonly property var screenChoices: Quickshell.screens.map(function(sc) {
+    var n = String(sc.name || "")
+    var friendly = /^eDP/.test(n) ? "Laptop" : (String(sc.model || "").trim() || n)
+    return { id: n, name: friendly }
+  })
+
+  // ---- workspaces: each monitor's own block of ten (Omarchy keeps which
+  // block is whose in monitor-workspaces)
+  property var wsBlocks: ({})
+  FileView {
+    path: (Quickshell.env("XDG_STATE_HOME") || root.home + "/.local/state") + "/omarchy/monitor-workspaces"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      var next = ({})
+      var lines = String(text()).split("\n")
+      for (var i = 0; i < lines.length; i++) {
+        var f = lines[i].split("\t")
+        if (f.length >= 3 && f[1] !== "") next[f[1]] = parseInt(f[0], 10)
+      }
+      root.wsBlocks = next
+    }
+    onLoadFailed: root.wsBlocks = ({})
+  }
+
+  // ---- what goes where: the corners and the closed notch (Layout.js), saved
+  // in prefs.json and changed with the editor
+  // The showcase shows the default layout, whatever yours is (nothing saved).
+  readonly property var barLayout: showcase ? Layout.defaults() : Layout.normalize(prefs.layout)
+  function setLayout(next) { setPref("layout", Layout.normalize(next)) }
+
+  // The session that matters most, for the agents item in a corner.
+  readonly property var lead: {
+    var list = claude.sessions
+    for (var i = 0; i < list.length; i++) if (list[i].state === "needs") return list[i]
+    for (var j = 0; j < list.length; j++) if (list[j].state === "working" || list[j].state === "watching") return list[j]
+    return { agent: defaultAgent, state: "idle" }
+  }
+
+  // A corner's row was clicked: open Omarchy's own panel for it, from the
+  // corner itself (the window's openFromCorner), not the notch.
+  readonly property var cornerPanels: ({ wifi: "omarchy.network", bluetooth: "omarchy.bluetooth", battery: "omarchy.power", volume: "omarchy.audio" })
+  function itemAction(id, action, value, win, ear) {
+    if (action === "speedtest") { Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omarchy.speedtest"]); return }
+    if (action === "mute") { toggleMode("mute"); return }
+    if (action === "volume") { setVolume(value); return }
+    if (action !== "open") return
+    if (id === "agents") { openConversations(); return }
+    if (cornerPanels[id] && win && ear) win.openFromCorner(ear, cornerPanels[id])
+  }
+  // A scroll over a corner: tracks over the music, workspaces over the dots,
+  // the volume anywhere else. Up is back (or louder).
+  function wheelAction(kind, steps, win) {
+    if (kind === "tracks") mediaAction(steps > 0 ? "previous" : "next")
+    else if (kind === "workspaces" && win) win.stepWorkspace(steps)
+    else if (kind === "volume") setVolume(volume + steps * 0.05)
+  }
+  function isInside(item, ancestor) {
+    for (var p = item; p; p = p.parent) if (p === ancestor) return true
+    return false
+  }
+
+  // ---- the editor: right-click the notch or a corner, or
+  // `omarchy-shell mike.notch edit` (`notch-look edit`)
+  property bool editorOpen: false
+  property var editorScreen: null
+  function openEditor() {
+    var name = focusedScreenName()
+    var screens = Quickshell.screens
+    var found = screens.length ? screens[0] : null
+    for (var i = 0; i < screens.length; i++) if (screens[i].name === name) found = screens[i]
+    editorScreen = found
+    editorOpen = true
+  }
+  // The open notch's buttons, in order, with their names.
+  readonly property var editorButtons: {
+    var registry = barWidgetRegistry
+    var revision = registry ? registry.revision : 0
+    return sections.strip.map(function(e) {
+      var meta = registry && typeof registry.metadataFor === "function" ? registry.metadataFor(e.id) : null
+      var name = meta && meta.displayName ? String(meta.displayName) : ""
+      if (!name) {
+        // Omarchy's own by what they are (omarchy.weather: "Weather"), anyone
+        // else's by whose they are (superwhisper.panel: "Superwhisper").
+        var parts = String(e.id).split(".")
+        name = (parts[0] === "omarchy" && parts.length > 1 ? parts.slice(1).join(" ") : parts[0]).replace(/-/g, " ")
+      }
+      return { id: e.id, name: name.charAt(0).toUpperCase() + name.slice(1) }
+    })
+  }
+  // A button dragged to `index` (counted without it): put it before the
+  // button now there, or after the last one, through Omarchy's own bar
+  // command so shell.json stays Omarchy's to write.
+  function moveButton(id, index) {
+    var rest = editorButtons.filter(function(b) { return b.id !== id })
+    if (rest.length === 0) return
+    if (index < rest.length) Quickshell.execDetached(["omarchy-bar", "move", id, "--before", rest[index].id])
+    else Quickshell.execDetached(["omarchy-bar", "move", id, "--after", rest[rest.length - 1].id])
+  }
+
+  // ---- saving battery: unplugged, everything that checks on things does
+  // so less often (agents every 3 s instead of every second, the machine
+  // every 5 s, the network every 3 s, the privacy dots every 6 s)
+  readonly property bool saving: UPower.onBattery
+  // A new interval needs a new agents.py; it restarts on its own after exiting.
+  onSavingChanged: sessions.running = false
+
+  // ---- the volume (the corners' volume item and scroll)
   readonly property var sink: Pipewire.defaultAudioSink
   PwObjectTracker { objects: root.sink ? [root.sink] : [] }
   readonly property real volume: sink && sink.audio ? Math.min(1, sink.audio.volume) : 0
   readonly property bool muted: !!(sink && sink.audio && sink.audio.muted)
 
-  property string layoutMode: "dwindle"
-  Process {
-    id: layoutProbe
-    running: true
-    command: ["omarchy-hyprland-workspace-layout-current"]
-    stdout: SplitParser { onRead: function(line) { var v = String(line).trim(); if (v) root.layoutMode = v } }
-  }
-  Connections {
-    target: Hyprland
-    function onFocusedWorkspaceChanged() { layoutProbe.running = true }
-  }
-  Timer { id: layoutRecheck; interval: 400; onTriggered: layoutProbe.running = true }
-
-  readonly property var modes: ({
-    screen: windowsUnderNotch,
-    dnd: notifService ? !!notifService.doNotDisturb : false,
-    awake: idleService ? !!idleService.stayAwake : false,
-    nightlight: nightService ? !!nightService.enabled : false,
-    muted: muted,
-    layout: layoutMode
-  })
-
   function toggleMode(mode) {
-    if (mode === "dnd" && notifService) notifService.setDoNotDisturb(!notifService.doNotDisturb)
-    else if (mode === "awake" && idleService) idleService.setIdleEnabled(!!idleService.stayAwake)
-    else if (mode === "nightlight" && nightService) nightService.setNightlight(!nightService.enabled)
-    else if (mode === "mute" && sink && sink.audio) sink.audio.muted = !sink.audio.muted
+    if (mode === "mute" && sink && sink.audio) sink.audio.muted = !sink.audio.muted
     else if (mode === "screen") setPref("windowsUnderNotch", !windowsUnderNotch)
-    else if (mode === "layout") {
-      Quickshell.execDetached(["omarchy-hyprland-workspace-layout-toggle"])
-      layoutRecheck.restart()
-    }
   }
   function setVolume(value) {
     if (!sink || !sink.audio) return
     sink.audio.volume = Math.max(0, Math.min(1, value))
     if (value > 0 && sink.audio.muted) sink.audio.muted = false
-  }
-
-  // Brightness through brightnessctl; a drag sends at most ~15 updates a second.
-  property real brightness: 0.5
-  property bool brightnessAvailable: false
-  property real pendingBrightness: -1
-  Process {
-    id: brightnessProbe
-    command: ["brightnessctl", "-m"]
-    stdout: SplitParser {
-      onRead: function(line) {
-        var parts = String(line).split(",")
-        if (parts.length >= 5 && parts[1] === "backlight") {
-          var current = Number(parts[2]), max = Number(parts[4])
-          if (max > 0) { root.brightness = current / max; root.brightnessAvailable = true }
-        }
-      }
-    }
-  }
-  Timer {
-    interval: 4000
-    repeat: true
-    running: true
-    triggeredOnStart: true
-    onTriggered: if (root.pendingBrightness < 0) brightnessProbe.running = true
-  }
-  Timer {
-    id: brightnessSend
-    interval: 66
-    onTriggered: {
-      if (root.pendingBrightness < 0) return
-      var pct = Math.max(1, Math.round(root.pendingBrightness * 100))
-      Quickshell.execDetached(["brightnessctl", "-q", "set", pct + "%"])
-      root.pendingBrightness = -1
-    }
-  }
-  function setBrightness(value) {
-    brightness = Math.max(0.01, Math.min(1, value))
-    pendingBrightness = brightness
-    if (!brightnessSend.running) brightnessSend.start()
   }
 
   // Claude plan usage, from the file Omarchy's agents panel keeps current.
@@ -702,50 +1138,6 @@ Item {
     }
   }
 
-  // Where the side notch sits: which edge, how far down, and whether it's shown.
-  property var side: ({ edge: "right", center: 0.42, hidden: false, screen: "" })
-  property bool sideLoaded: false
-  readonly property string sideStatePath: root.home + "/.local/state/mike-notch/side.json"
-  FileView {
-    id: sideFile
-    path: root.sideStatePath
-    printErrors: false
-    onLoaded: {
-      try {
-        var d = JSON.parse(text())
-        root.side = {
-          edge: d.edge === "left" ? "left" : "right",
-          center: Math.max(0, Math.min(1, Number(d.center))) || 0.42,
-          hidden: d.hidden === true,
-          screen: String(d.screen || "")
-        }
-      } catch (e) {}
-      root.sideLoaded = true
-    }
-    onLoadFailed: root.sideLoaded = true
-  }
-  function saveSide(next) {
-    side = next
-    Quickshell.execDetached(["mkdir", "-p", root.home + "/.local/state/mike-notch"])
-    sideSave.restart()
-  }
-  Timer {
-    id: sideSave
-    interval: 250
-    onTriggered: sideFile.setText(JSON.stringify(root.side) + "\n")
-  }
-  function sideWith(changes) {
-    var next = {}
-    for (var k in side) next[k] = side[k]
-    for (var c in changes) next[c] = changes[c]
-    return next
-  }
-  readonly property var sideScreen: {
-    var screens = Quickshell.screens
-    for (var i = 0; i < screens.length; i++) if (screens[i].name === side.screen) return screens[i]
-    return screens.length ? screens[0] : null
-  }
-
   // ---- one notch per screen
   Variants {
     id: notches
@@ -757,7 +1149,7 @@ Item {
       required property var modelData
       screen: modelData
       readonly property string screenName: modelData ? modelData.name : ""
-      readonly property real thickness: notch.open ? notch.expandedHeight : notch.collapsedHeight
+      readonly property real thickness: root.topGap + (notch.open ? notch.expandedHeight : notch.collapsedHeight)
 
 
       // A panel summoned from a shortcut: open the notch, then the panel.
@@ -789,23 +1181,158 @@ Item {
       }
 
       // A widget's panel or a tray app's menu is open: keep the notch open.
+      // A panel opened from a corner keeps the notch shut.
       readonly property bool holdsPopout: {
         var owner = root.activePopout
         if (!owner) return false
+        if (root.isInside(owner, leftEar) || root.isInside(owner, rightEar)) return false
         if (Quickshell.screens.length <= 1) return true
         return root.targetBelongsToWindow(owner, win)
       }
 
+      readonly property alias leftCorner: leftEar
+      readonly property alias rightCorner: rightEar
+
+      // The corners show only with the notch's own strip, and not over an app
+      // that's fullscreen (Super+F): then only the notch shows, holding the
+      // corners' items too.
+      readonly property var hyprMonitor: Hyprland.monitorFor(win.screen)
+      readonly property bool fullscreenHere: !!(hyprMonitor && hyprMonitor.activeWorkspace && hyprMonitor.activeWorkspace.hasFullscreen)
+      readonly property bool cornersOn: (!root.windowsUnderNotch || root.showcase) && !fullscreenHere
+        && (root.cornerScreen === "" || !root.cornerScreenPresent || root.cornerScreen === win.screenName)
+
+      // This monitor's workspaces as dots: the first five of its block, any
+      // other of its block that exists, then visitors (Omarchy's own rule).
+      readonly property int activeWs: hyprMonitor && hyprMonitor.activeWorkspace ? hyprMonitor.activeWorkspace.id : -1
+      readonly property var wsDots: {
+        if (!hyprMonitor) return []
+        var name = hyprMonitor.name
+        var active = activeWs
+        var block = root.wsBlocks[name] !== undefined ? root.wsBlocks[name] : (active > 0 ? Math.floor((active - 1) / 10) : 0)
+        var base = block * 10
+        var ids = [base + 1, base + 2, base + 3, base + 4, base + 5]
+        var guests = []
+        var byId = ({})
+        var values = Hyprland.workspaces ? Hyprland.workspaces.values : []
+        for (var i = 0; i < values.length; i++) {
+          var ws = values[i]
+          if (!ws || ws.id <= 0) continue
+          byId[ws.id] = ws
+          if (Math.floor((ws.id - 1) / 10) === block) { if (ids.indexOf(ws.id) === -1) ids.push(ws.id) }
+          else if (ws.monitor && ws.monitor.name === name) guests.push(ws.id)
+        }
+        ids.sort(function(a, b) { return a - b })
+        guests.sort(function(a, b) { return a - b })
+        return ids.concat(guests).map(function(id) {
+          var w = byId[id]
+          var count = w && w.toplevels ? w.toplevels.values.length : 0
+          return { id: id, slot: Math.floor((id - 1) / 10) === block ? (id - 1) % 10 + 1 : id, active: id === active, occupied: count > 0 }
+        })
+      }
+      function focusWorkspace(id) {
+        var name = hyprMonitor ? hyprMonitor.name : ""
+        var block = root.wsBlocks[name] !== undefined ? root.wsBlocks[name] : (activeWs > 0 ? Math.floor((activeWs - 1) / 10) : 0)
+        var expr = Math.floor((id - 1) / 10) === block
+          ? "o.workspaces.focus(" + ((id - 1) % 10 + 1) + ", \"" + name + "\")"
+          : "hl.dsp.focus({ workspace = \"" + id + "\" })"
+        var command = "hyprctl dispatch " + Util.shellQuote(expr)
+        if (hyprMonitor && !hyprMonitor.focused)
+          command = "hyprctl dispatch " + Util.shellQuote("hl.dsp.focus({ monitor = \"" + name + "\" })") + " >/dev/null && " + command
+        root.run(command)
+      }
+      // Next or previous workspace, for a scroll over the dots.
+      function stepWorkspace(steps) {
+        var dots = wsDots
+        var at = -1
+        for (var i = 0; i < dots.length; i++) if (dots[i].active) at = i
+        if (at < 0 || dots.length === 0) return
+        var to = Math.max(0, Math.min(dots.length - 1, at - steps))
+        if (to !== at) focusWorkspace(dots[to].id)
+      }
+      // The bar's status, with this monitor's workspaces and the privacy dots.
+      readonly property var screenStatus: {
+        var out = ({})
+        var st = root.status
+        for (var k in st) out[k] = st[k]
+        out.workspaces = wsDots
+        out.privacy = root.showcase ? ({ mic: true, micApps: "Zoom", camera: true, cameraApp: "Zoom", screen: false }) : root.privacy
+        if (root.showcase && st.wifi && st.wifi.kind === "wifi") {
+          var w = ({})
+          for (var j in st.wifi) w[j] = st.wifi[j]
+          w.name = "Home"
+          out.wifi = w
+        }
+        return out
+      }
+      // Omarchy's widgets whose items show in a corner here: their buttons
+      // leave the open notch (the corner opens their panels instead).
+      readonly property var cornerWidgets: {
+        if (!cornersOn) return []
+        var out = []
+        var items = [].concat(root.barLayout.left, root.barLayout.right)
+        for (var i = 0; i < items.length; i++) if (root.cornerPanels[items[i]]) out.push(root.cornerPanels[items[i]])
+        return out
+      }
+      function cornerFor(widgetId) {
+        if (cornerWidgets.indexOf(widgetId) === -1) return null
+        for (var item in root.cornerPanels) {
+          if (root.cornerPanels[item] !== widgetId) continue
+          if (root.barLayout.right.indexOf(item) !== -1) return rightEar
+          if (root.barLayout.left.indexOf(item) !== -1) return leftEar
+        }
+        return null
+      }
+      readonly property var notchItems: cornersOn ? root.barLayout.center
+        : [].concat(root.barLayout.left, root.barLayout.center, root.barLayout.right)
+
+      // Omarchy's widgets for the corners' panels, made the first time one is
+      // asked for and kept: "left:omarchy.network" -> WidgetHost.
+      property var cornerHosts: ({})
+      Component {
+        id: cornerHostComponent
+        WidgetHost { register: false }
+      }
+      function openFromCorner(ear, widgetId) {
+        var key = ear.side + ":" + widgetId
+        var h = cornerHosts[key]
+        if (!h) {
+          h = cornerHostComponent.createObject(ear.panelSlot, {
+            host: root, screenName: win.screenName, window: win, modelData: ({ id: widgetId })
+          })
+          if (!h) return
+          var next = ({})
+          for (var k in cornerHosts) next[k] = cornerHosts[k]
+          next[key] = h
+          cornerHosts = next
+        }
+        cornerOpen.target = h
+        cornerOpen.tries = 0
+        cornerOpen.restart()
+      }
+      // The widget may still be loading: open it once it's there.
+      Timer {
+        id: cornerOpen
+        property var target: null
+        property int tries: 0
+        interval: 30
+        onTriggered: {
+          var item = target ? target.item : null
+          if (item && typeof item.open === "function") {
+            if (item.opened === true && typeof item.close === "function") item.close()
+            else item.open()
+          } else if (++tries < 20) restart()
+        }
+      }
+
       anchors { top: true; left: true; right: true }
-      implicitHeight: notch.implicitHeight + 40
+      implicitHeight: Math.max(notch.implicitHeight + root.topGap, leftEar.implicitHeight, rightEar.implicitHeight) + 40
       color: "transparent"
-      // Full screen (the default): no reserved strip, every window gets the
-      // whole screen and the notch sits over it like a camera notch,
-      // see-through until it's used. Switched off (the Full screen switch in
-      // the side strip's Modes), the notch keeps a strip and windows start
-      // below it.
+      // Full screen (the editor's switch): no reserved strip, every window
+      // gets the whole screen and the notch sits over it like a camera notch,
+      // see-through until it's used. Otherwise the notch keeps a strip and
+      // windows start below it.
       exclusionMode: root.windowsUnderNotch || root.barHidden ? ExclusionMode.Ignore : ExclusionMode.Normal
-      exclusiveZone: root.windowsUnderNotch ? 0 : notch.collapsedHeight
+      exclusiveZone: root.windowsUnderNotch ? 0 : notch.collapsedHeight + root.topGap
       margins.top: root.barHidden ? -implicitHeight : 0
       WlrLayershell.namespace: "mike-notch"
       // Above everything, fullscreen apps included.
@@ -815,21 +1342,37 @@ Item {
       // item's region doesn't follow its parent moving.
       mask: Region {
         x: Math.floor((win.width - notch.bodyW) / 2)
-        y: 0
+        y: Math.floor(notch.y)
         width: Math.ceil(notch.bodyW)
         height: Math.max(1, Math.ceil(notch.bodyH))
+        regions: [
+          Region {
+            x: Math.floor(leftEar.inset)
+            y: Math.floor(leftEar.inset)
+            width: leftEar.covered ? 0 : Math.ceil(leftEar.bodyW)
+            height: Math.ceil(leftEar.bodyH)
+          },
+          Region {
+            x: Math.floor(win.width - rightEar.bodyW - rightEar.inset)
+            y: Math.floor(rightEar.inset)
+            width: rightEar.covered ? 0 : Math.ceil(rightEar.bodyW)
+            height: Math.ceil(rightEar.bodyH)
+          }
+        ]
       }
 
       Notch {
         id: notch
         anchors.horizontalCenter: parent.horizontalCenter
-        y: 0
+        y: root.topGap
+        floating: root.floating
+        maxExpandedWidth: Math.max(600, win.width - 48)
         motion: root.motion
-        status: root.status
+        status: win.screenStatus
         alert: root.alert
         onAlertDismissed: root.alert = null
         notificationsShowing: root.notificationsShowing
-        seeThroughWhenIdle: root.windowsUnderNotch
+        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase
         defaultAgent: root.defaultAgent
         forceOpen: root.pinned && (Quickshell.screens.length <= 1 || win.screenName === root.focusedScreenName())
         hold: win.holdsPopout || win.summonHold
@@ -837,15 +1380,79 @@ Item {
         clockFormat: root.clockFormat
         media: root.media
         claude: root.claude
+        items: win.notchItems
+        cards: root.barLayout.cards
+        system: root.system
+        notifications: root.notifications
+        onNotificationsCleared: root.clearNotifications()
+        onNotificationsShowAll: root.showAllNotifications()
+        onWorkspaceRequested: function(id) { win.focusWorkspace(id) }
+        onOpenChanged: root.openNotches = Math.max(0, root.openNotches + (open ? 1 : -1))
+        onEditRequested: root.openEditor()
         onMediaRequested: function(action) { root.mediaAction(action) }
         onSessionRequested: function(session) { root.focusSession(session) }
         onConversationsRequested: root.openConversations()
       }
 
+      // The corners: music on the left, Wi-Fi, Bluetooth and the battery on the
+      // right, by default (the editor moves things around).
+      Ear {
+        id: leftEar
+        floating: root.floating
+        covered: notch.progress > 0.2 && leftEar.inset + leftEar.bodyW + 8 > (win.width - notch.bodyW) / 2
+        forceOpen: (root.lowBatteryAlert && items.indexOf("battery") !== -1) || root.showCornerSide === side
+        onWorkspaceRequested: function(id) { win.focusWorkspace(id) }
+        onWheelRequested: function(kind, steps) { root.wheelAction(kind, steps, win) }
+        suppressed: !win.cornersOn
+        holdClosed: !!root.activePopout && root.isInside(root.activePopout, leftEar)
+        x: 0
+        side: "left"
+        items: root.barLayout.left
+        status: win.screenStatus
+        media: root.media
+        now: clock.date
+        clockFormat: root.clockFormat
+        motion: root.motion
+        lead: root.lead
+        counts: root.claude.counts
+        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase
+        onOpenChanged: root.openCorners = Math.max(0, root.openCorners + (open ? 1 : -1))
+        Component.onDestruction: if (open) root.openCorners = Math.max(0, root.openCorners - 1)
+        onMediaRequested: function(action, value) { root.mediaAction(action, value) }
+        onItemRequested: function(itemId, action, value) { root.itemAction(itemId, action, value, win, leftEar) }
+        onEditRequested: root.openEditor()
+      }
+      Ear {
+        id: rightEar
+        floating: root.floating
+        covered: notch.progress > 0.2 && rightEar.inset + rightEar.bodyW + 8 > (win.width - notch.bodyW) / 2
+        forceOpen: (root.lowBatteryAlert && items.indexOf("battery") !== -1) || root.showCornerSide === side
+        onWorkspaceRequested: function(id) { win.focusWorkspace(id) }
+        onWheelRequested: function(kind, steps) { root.wheelAction(kind, steps, win) }
+        suppressed: !win.cornersOn
+        holdClosed: !!root.activePopout && root.isInside(root.activePopout, rightEar)
+        x: win.width - width
+        side: "right"
+        items: root.barLayout.right
+        status: win.screenStatus
+        media: root.media
+        now: clock.date
+        clockFormat: root.clockFormat
+        motion: root.motion
+        lead: root.lead
+        counts: root.claude.counts
+        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase
+        onOpenChanged: root.openCorners = Math.max(0, root.openCorners + (open ? 1 : -1))
+        Component.onDestruction: if (open) root.openCorners = Math.max(0, root.openCorners - 1)
+        onMediaRequested: function(action, value) { root.mediaAction(action, value) }
+        onItemRequested: function(itemId, action, value) { root.itemAction(itemId, action, value, win, rightEar) }
+        onEditRequested: root.openEditor()
+      }
+
       // How far down the notch reaches, for the notifications hanging under it
       // (a copy of Omarchy's notifications can't ask the bar, so it reads this).
-      readonly property int reach: Math.round(notch.open ? notch.expandedHeight
-        : (notch.alertActive ? notch.alertHeight : notch.collapsedHeight))
+      readonly property int reach: Math.round(root.topGap + (notch.open ? notch.expandedHeight
+        : (notch.alertActive ? notch.alertHeight : notch.collapsedHeight)))
       onReachChanged: reachSave.restart()
       Component.onCompleted: reachSave.restart()
       Timer {
@@ -868,7 +1475,7 @@ Item {
       }
       Instantiator {
         model: root.sections.strip
-        delegate: WidgetHost { host: root; screenName: win.screenName; window: win }
+        delegate: WidgetHost { host: root; screenName: win.screenName; window: win; hiddenIds: win.cornerWidgets }
         onObjectAdded: function(index, object) { object.parent = notch.statusSlot }
       }
       // Tray apps, every one of them, at the end of the row.
@@ -910,76 +1517,49 @@ Item {
     }
   }
 
-  // ---- the side notch
+  // ---- the top bar's editor, on the screen you're on
   PanelWindow {
-    id: sideWin
-
-    screen: root.sideScreen
-    visible: root.sideLoaded && !root.barHidden && !root.side.hidden
-    readonly property bool onLeft: root.side.edge === "left"
-    anchors { top: true; bottom: true; left: sideWin.onLeft; right: !sideWin.onLeft }
-    implicitWidth: sideNotch.implicitWidth + 4
+    id: editorWin
+    visible: root.editorOpen
+    screen: root.editorScreen
+    anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "mike-side-notch"
-    WlrLayershell.layer: WlrLayer.Top
-    // Only the strip and the tab that's out take the pointer. Exact numbers
-    // rather than items: an item's region doesn't follow the strip moving.
-    mask: Region {
-      x: Math.floor(sideNotch.x + sideNotch.stripX)
-      y: Math.floor(sideNotch.y + sideNotch.stripTop)
-      width: Math.ceil(sideNotch.stripW)
-      height: Math.ceil(sideNotch.bodyH)
-      regions: [
-        Region {
-          x: Math.floor(sideNotch.x + sideNotch.flyAreaX)
-          y: Math.floor(sideNotch.y + sideNotch.flyGeom.y)
-          width: Math.ceil(sideNotch.flyGeom.w)
-          height: Math.ceil(sideNotch.flyGeom.h)
-        }
-      ]
+    WlrLayershell.namespace: "mike-notch-editor"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: root.editorOpen ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+
+    // A light dim, so the bar stays in view and changes show on it live.
+    Rectangle {
+      anchors.fill: parent
+      color: Qt.rgba(0, 0, 0, Theme.dark ? 0.26 : 0.14)
+      MouseArea { anchors.fill: parent; onClicked: root.editorOpen = false }
     }
 
-    readonly property var monitor: Hyprland.monitorFor(sideWin.screen)
-    readonly property bool fullscreenHere: !!(monitor && monitor.activeWorkspace && monitor.activeWorkspace.hasFullscreen)
-
-    // Dragging: follow the pointer along the edge; across the screen, switch edge.
-    property real dragDy: 0
-    readonly property real centerY: root.side.center * height + dragDy
-
-    SideNotch {
-      id: sideNotch
-      x: sideWin.onLeft ? 0 : sideWin.width - width
-      // Placed by its height with Modes shut, so opening Modes never moves the
-      // icons: downward it grows from a fixed top; upward (no room below) it
-      // grows from a fixed bottom.
-      readonly property real restTop: Math.max(4, Math.min(sideWin.centerY - restHeight / 2, sideWin.height - restHeight - 4))
-      y: Math.round(modesUp ? restTop - modesAmount * modesListH : Math.min(restTop, sideWin.height - height - 4))
-      roomBelow: sideWin.height - (restTop + restHeight) - 4
-      edge: root.side.edge
+    Editor {
+      id: editor
+      anchors.centerIn: parent
+      layout: root.barLayout
+      buttons: root.editorButtons
+      status: root.status
+      media: root.media
+      now: clock.date
+      clockFormat: root.clockFormat
+      lead: root.lead
       motion: root.motion
-      modes: root.modes
-      volume: root.volume
-      brightness: root.brightness
-      brightnessAvailable: root.brightnessAvailable
-      usage: root.usage
-      fullscreen: sideWin.fullscreenHere
-
-      onModeRequested: function(mode) { root.toggleMode(mode) }
-      onMuteRequested: root.toggleMode("mute")
-      onVolumeRequested: function(value) { root.setVolume(value) }
-      onBrightnessRequested: function(value) { root.setBrightness(value) }
-      onDragged: function(dx, dy) { sideWin.dragDy = dy }
-      onDropped: function(dx, dy) {
-        var h = Math.max(1, sideWin.height)
-        var center = Math.max(0.06, Math.min(0.94, (root.side.center * h + dy) / h))
-        var width = sideWin.screen ? sideWin.screen.width : 1920
-        var edge = root.side.edge
-        if (edge === "right" && dx < -width * 0.35) edge = "left"
-        else if (edge === "left" && dx > width * 0.35) edge = "right"
-        sideWin.dragDy = 0
-        root.saveSide(root.sideWith({ center: center, edge: edge, screen: sideWin.screen ? sideWin.screen.name : "" }))
-      }
+      glass: root.glass
+      floating: root.floating
+      screens: root.screenChoices
+      cornerScreen: root.cornerScreenPresent ? root.cornerScreen : ""
+      fullScreen: root.windowsUnderNotch
+      onEdited: function(next) { root.setLayout(next) }
+      onButtonMoved: function(id, index) { root.moveButton(id, index) }
+      onGlassRequested: function(glass) { root.setPref("glass", glass) }
+      onFloatingRequested: function(on) { root.setPref("notchStyle", on ? "floating" : "attached") }
+      onCornerScreenRequested: function(name) { root.setPref("cornerScreen", name) }
+      onFullScreenRequested: function(on) { root.setPref("windowsUnderNotch", on) }
+      onCloseRequested: root.editorOpen = false
     }
+    onVisibleChanged: if (visible) editor.forceActiveFocus()
   }
 }

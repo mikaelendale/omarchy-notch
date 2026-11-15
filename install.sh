@@ -64,8 +64,8 @@ found || fail "the shell didn't find the plugin; try omarchy restart shell, then
 
 cat <<'DONE'
 
-The notch is on. Hover it at the top of the screen; the side strip of icons
-is on the right edge.
+The notch is on. Hover it at the top of the screen, or the corners beside
+it; right-click any of them to choose what goes where.
 
   notch-look         what's on
   notch-look off     everything back the way it was

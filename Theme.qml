@@ -25,7 +25,10 @@ QtObject {
   // Thick enough that the theme's colour always leads: Omarchy's blur is
   // light, so at thinner tints a busy or bright wallpaper shows through as
   // shapes and the notch takes on the wallpaper's look instead of the theme's.
-  readonly property real frostAlpha: dark ? 0.86 : 0.88
+  // Solid (the editor's Look: Solid): the glass is the theme's colour, with
+  // nothing showing through.
+  property bool solid: false
+  readonly property real frostAlpha: solid ? 1 : (dark ? 0.86 : 0.88)
   readonly property color body: Qt.rgba(background.r, background.g, background.b, frostAlpha)
   // A little light along the top edge, like glass catching it.
   readonly property color bodyTop: Qt.tint(body, Qt.rgba(1, 1, 1, dark ? 0.06 : 0.34))

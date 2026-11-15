@@ -1,8 +1,8 @@
 # Notch
 
-Replaces Omarchy's top bar with a frosted notch in your theme's colours, and adds a slim strip of quick controls to the edge of the screen and a dock to match. Made for light and dark themes alike.
+Replaces Omarchy's top bar with a frosted notch in your theme's colours, with a corner on each side of it for your workspaces, music and status icons, and a dock to match. Made for light and dark themes alike.
 
-![The notch opened: menu, clock and status buttons, with cards for music, today and your coding agents](screenshots/notch-open-dark.png)
+![The notch opened: the menu, the clock and a row of buttons, with cards for the machine, your notifications and your coding agents; the music and status corners on either side](screenshots/notch-open.png)
 
 Tested on Omarchy 4.5 (Hyprland 0.56, Quickshell 0.3).
 
@@ -37,25 +37,28 @@ o.rebind("SUPER + SHIFT + C", "Claude conversations",
 
 ## Screenshots
 
-The whole desktop, dark (Starship) and light (Catppuccin Latte): the notch at the top, the strip resting on the right edge, the dock at the bottom.
+The top of the screen: workspace dots and what's playing on the left, the notch with your agents, the time and the privacy dots in the middle, Wi-Fi, Bluetooth and the battery on the right. Floating:
+
+![The bar floating: three frosted pills a little below the top edge](screenshots/bar-floating.png)
+
+and attached, flaring into the top edge:
+
+![The bar attached: the notch and both corners flaring into the top edge](screenshots/bar-attached.png)
+
+The corners, opened: the music player (with the workspaces under it), and the details of Wi-Fi, Bluetooth and the battery.
 
 <p>
-  <img src="screenshots/desktop-dark.jpg" width="49%" alt="The desktop in a dark theme: the closed notch at the top, the strip on the right edge, the dock at the bottom">
-  <img src="screenshots/desktop-light.jpg" width="49%" alt="The same desktop in a light theme">
+  <img src="screenshots/corner-music.png" width="49%" alt="The music corner open: the cover, title, seek bar and controls, with numbered workspaces below">
+  <img src="screenshots/corner-status.png" width="49%" alt="The status corner open: Wi-Fi with a speed test button, Bluetooth, and the battery">
 </p>
 
-The notch opened, in a light theme:
+The editor (right-click the bar): what goes where, the open notch's cards and buttons, and the look.
 
-![The notch opened in a light theme, with white cards](screenshots/notch-open-light.png)
+![The editor: the top of the screen in small with each item where it goes, the cards and buttons of the open notch, and switches for frosted or solid, attached or floating, and full screen](screenshots/editor.png)
 
-The side strip: Modes dropped down, and the volume sliding out.
+The whole desktop:
 
-<p>
-  <img src="screenshots/side-modes-dark.png" width="24%" alt="The side strip with its Modes switches dropped down, dark">
-  <img src="screenshots/side-volume-dark.png" width="24%" alt="The volume slider sliding out of the strip, dark">
-  <img src="screenshots/side-modes-light.png" width="24%" alt="The side strip with its Modes switches dropped down, light">
-  <img src="screenshots/side-volume-light.png" width="24%" alt="The volume slider sliding out of the strip, light">
-</p>
+![The desktop with the bar at the top](screenshots/desktop.jpg)
 
 The dock, with an app's name on hover and dots under the open ones:
 
@@ -75,7 +78,6 @@ notch-look                         # what's on now
 notch-look off                     # everything back the way it was
 notch-look on                      # everything on again
 notch-look bar on|off              # the notch, or the bar you had before
-notch-look side on|off             # the side strip of icons
 notch-look round 14|20|off         # corner rounding for windows and pop-ups (off = square)
 notch-look surfaces on|off         # frosted pop-ups, menus and notifications
 notch-look claude-toasts notch|desktop   # Claude alerts in the notch, or as notifications
@@ -86,6 +88,9 @@ notch-look motion on|off                 # smoother window animations and soft s
 notch-look bell on|off                   # a terminal's bell shows its agent as needing you (foot)
 notch-look font on|off                   # Omarchy's panels and menus in the notch's font
 notch-look preview                       # a minute of made-up agent sessions, to see it busy
+notch-look showcase                      # made-up sessions, notifications and privacy dots, no network
+                                         # name, the default layout: for screenshots that show nothing of yours
+notch-look edit                          # the editor (or right-click the notch or a corner)
 ```
 
 It only edits marked blocks in your own config files:
@@ -98,7 +103,7 @@ It only edits marked blocks in your own config files:
 
 Nothing of Omarchy's own is touched, so updates keep coming either way. If this plugin ever fails to load, Omarchy falls back to its own bar by itself.
 
-**Frost, in your theme's colours:** the notch, the side strip, the dock, Omarchy's panels, notifications, the OSD and menus are frosted: blurred by Hyprland (Omarchy's own glass blur) under a thick tint of the current theme's colours. Omarchy's blur is light, so the tint is what keeps a busy or bright wallpaper from showing through as shapes; every theme looks like itself, whatever its wallpaper. Switching themes re-tints everything.
+**Frost, in your theme's colours:** the notch and its corners, the dock, Omarchy's panels, notifications, the OSD and menus are frosted: blurred by Hyprland (Omarchy's own glass blur) under a thick tint of the current theme's colours. Omarchy's blur is light, so the tint is what keeps a busy or bright wallpaper from showing through as shapes; every theme looks like itself, whatever its wallpaper. Switching themes re-tints everything.
 
 **Light and dark:** light themes get their own look rather than an inverted dark one:
 
@@ -121,10 +126,11 @@ A hook (`~/.config/omarchy/hooks/post-update.d/notch-notifications`) rebuilds bo
 
 ## Top notch
 
-Closed, it shows your agent's mark, the time, Wi-Fi and the battery, like a phone's status bar:
+Closed, it shows your agent's mark, the time and the privacy dots, like a phone's island, with a corner on each side of it (see [Corners](#corners)):
 
 - the mark is your agent's own: Claude's orange starburst, or Codex's, OpenCode's, Antigravity's... While a session works, a circle grows from nothing to uncover the mark and shrinks back again; when one is waiting on you, it turns yellow with **needs you**
-- the cover and moving bars show while music plays
+- privacy dots, while something uses them: orange for the microphone, green for the camera, red while the screen is being recorded
+- the [editor](#editor) changes what it shows: the date, music, Wi-Fi, the battery, the workspaces and more can move into it
 
 **Every coding agent, not just Claude:**
 
@@ -137,26 +143,46 @@ Closed, it shows your agent's mark, the time, Wi-Fi and the battery, like a phon
 
 **Open:** hover the notch to open the full bar:
 
-- the Omarchy menu, the clock, and one scrollable row of round buttons: Wi-Fi, Bluetooth, volume, battery, displays, Claude, agents and the rest of Omarchy's widgets, then every tray app. The icons are the notch's own, drawn from live state. Clicking one opens Omarchy's usual panel, and only one panel is open at a time.
-- cards for what's playing (cover, title, controls), today's date, and your agent sessions: as many as the card has room for, most urgent first, with the rest counted on the Conversations button. Nothing in the notch scrolls with a scroll bar; long names are cut short with "…".
+- the Omarchy menu, the clock, and one row of round buttons: Wi-Fi, Bluetooth, volume, battery, displays, Claude, agents and the rest of Omarchy's widgets, then every tray app. The icons are the notch's own, drawn from live state. Clicking one opens Omarchy's usual panel, and only one panel is open at a time. The row never scrolls: when the right half can't hold it, the clock moves beside the menu and the buttons carry on into the left half (and the notch widens if it must). A button whose item shows in a corner (Wi-Fi, Bluetooth, the battery, the volume) leaves the row; the corner opens its panel instead, and so does its keyboard shortcut.
+- cards: **System** (how busy the processor is, memory and disk in use, how warm it's running, and how long it's been up), **Notifications** (the ones you've had, newest first, even after they're gone from the screen: as many as fit, then "N more · Show all", which brings them back up as Omarchy's own cards; **Clear** starts the list afresh), **Today** (the date and this week), and your **Agents** sessions: as many as the card has room for, most urgent first, with the rest counted on the Conversations button. Music has its own corner, so its card is off by default, and so is Today; the [editor](#editor) puts it back, reorders the cards or takes any of them off. Nothing in the notch scrolls with a scroll bar; long names are cut short with "…".
 
-**Full screen:** normally the notch is solid and keeps a strip of its own at the top, and windows start below it. The **Full screen** switch in the side strip's Modes (or `notch-look windows under`) lets every window run the whole height of the screen, under the notch. In that mode the notch is see-through while nothing's going on, and turns solid when you hover it, when a toast or notification shows, or when an agent needs you.
+**Full screen:** normally the notch keeps a strip of its own at the top, and windows start below it. The **Full screen** switch (in the editor, or `notch-look windows under`) lets every window run the whole height of the screen, under the notch. In that mode the notch is see-through while nothing's going on, and turns solid when you hover it, when a toast or notification shows, or when an agent needs you; the corners hide, and their items show in the notch instead.
+
+**Frosted or solid:** the notch and the corners are frosted glass in your theme's colours, or, with **Solid** in the editor, the theme's colour all the way through.
+
+**Attached or floating:** the notch and the corners hang from the top edge and flare into it, or, with **Floating** in the editor, they're pills of their own a little below it.
 
 The buttons come from the same `bar.layout` in `~/.config/omarchy/shell.json` that the stock bar uses:
 
-- `omarchy bar move <id> ...` changes their order.
+- the [editor](#editor), or `omarchy bar move <id> ...`, changes their order.
 - `omarchy plugin disable <id>` removes one.
 
-## Side strip
+## Corners
 
-A slim strip of icons on the right edge. It fades to a ghost while you're not using it, and comes forward the moment the pointer reaches it. Over a fullscreen app it's invisible until hovered.
+Two short frosted pills tucked into the top corners of the screen, on either side of the notch. They curve into the top edge and the side edge, so they read as part of the screen's frame, like the notch.
 
-- **Modes:** hover to drop the switches down (Do not disturb, Stay awake, Night light, Mute, window layout, Full screen). The list covers the icons below rather than pushing them, so nothing moves under the pointer. Near the bottom of the screen it opens upward. Hover a switch for its name; click to flip it.
-- **Volume:** hover to slide out a slider. Click the icon to mute, or scroll on it to nudge the volume.
-- **Brightness:** the same.
-- **Usage:** your Claude 5-hour and weekly limits.
+- **Left: your workspaces and music.** The workspaces are dots, one per workspace of this screen's (Omarchy's own rule: its first five, and any other in use); the one you're on is a short bar, ones with windows are full, empty ones faint. Click a dot to go there, or scroll over them to step along. Opened, they're numbered buttons.
 
-Drag it by the grip or anywhere on it to move it up and down the edge. Drag it across the screen to move it to the other edge. It remembers where you left it.
+  The music appears when something starts playing: the cover, the title and moving bars. Paused, it stays, with the title dimmed and the bars lying flat, until the player closes. Tap it to go to the window that's playing (found by the track's title, else the media site's window, such as YouTube's). Hover it and it opens into a player: the cover and title (tap them to go to the window too), the artist and app, a seek bar you can click or drag, and the controls the player supports: shuffle, previous, play or pause, next, repeat, and its speed for players that have more than one (podcasts, videos). Shuffle and repeat show a dot while they're on. With more than one player going (Spotify and a YouTube tab, say), a small pill beside the app's name switches to the other one. Scroll over the music to skip tracks.
+- **Right: Wi-Fi, Bluetooth and the battery.** Hover it and it opens into a row each: the network you're on and how fast it's going (with a **Speed test** button that runs Omarchy's speed test), the headphones that are connected, and how long the battery lasts or how long it needs to charge. Click a row and Omarchy's own panel for it opens right there, under the corner; the notch stays shut.
+
+Scroll over a corner (anywhere but the music and the workspaces) to change the volume. When the battery drops to 15% (and again at 5%) unplugged, its corner opens for a few seconds, the battery red.
+
+A corner with nothing to show hides. In full-screen mode, and while an app is fullscreen (Super+F), both corners hide and only the notch shows, holding their items. With more than one screen, the editor can keep the corners to one of them.
+
+**Saving battery:** unplugged, everything the bar checks on is checked less often: your agents every 3 seconds instead of every second, the machine every 5, the network every 3, the privacy dots every 6.
+
+## Editor
+
+Right-click the notch or a corner (or run `notch-look edit`) to change everything about the bar:
+
+- **What the corners and the closed notch show.** It shows the top of your screen in small: drag an item between the left corner, the notch and the right corner, or onto **Not shown** to take it off. Or click an item, then click where it goes (Esc puts it down). Or use the keyboard: the arrows move a ring from item to item, Enter picks it up, the arrows then move it along (Down takes it off, Up puts it back), and Enter puts it down. The items: workspaces, music, agents, the time, the date, the privacy dots, Wi-Fi, Bluetooth, the battery, the volume and the network speed.
+- **Which screens get the corners**, with more than one screen.
+- **The open notch's cards:** System, Notifications, Music, Today and Agents, in any order, any of them off.
+- **The open notch's buttons:** Omarchy's buttons, reordered (through `omarchy bar move`).
+- **Frosted or Solid**, **Attached or Floating**, and **Full screen**.
+
+Changes apply as they land; **Reset** puts the defaults back. It's all saved in `~/.local/state/mike-notch/prefs.json`. What the editor does goes into the shell's log, prefixed `mike.notch editor:`.
 
 ## Dock
 
@@ -179,12 +205,15 @@ It works on any edge: `omarchy dock position bottom|left|right|top`. `notch-look
 | `bin/claude-conversations` | The Super+Shift+C conversations picker |
 | `Bar.qml` | The bar host: data, Omarchy's widgets, tray apps, toasts, the windows |
 | `Notch.qml`, `NotchShape.qml` | The top notch |
+| `Ear.qml`, `EarShape.qml`, `MiniPlayer.qml`, `DetailRow.qml` | The corners: the pill, its shape, the music player and the detail rows |
+| `SystemCard.qml`, `NotificationsCard.qml` | The open notch's system and notifications cards |
+| `StatusItem.qml`, `Layout.js` | Every item the bar can show, drawn small; what goes where |
+| `Players.js` | Finds the window that's playing, for a tap on the music |
+| `Editor.qml`, `EditorChip.qml` | The editor |
 | `MediaCard.qml`, `TodayCard.qml`, `ClaudeCard.qml`, `SessionRow.qml` | The open notch's cards |
 | `WidgetHost.qml`, `TrayButton.qml`, `MenuRow.qml` | Round buttons for Omarchy's widgets and tray apps; tray menus |
 | `ClaudeLogo.qml`, `WifiIcon.qml`, `BluetoothIcon.qml`, `VolumeIcon.qml`, `BatteryIcon.qml`, `DisplayIcon.qml`, `UsageDial.qml` | The notch's own icons |
-| `SideNotch.qml`, `SideNotchShape.qml` | The side strip |
-| `StripIcon.qml`, `HoverGroup.qml`, `Flyout.qml`, `Fillet.qml` | Its icons, hover timing, slide-out tabs and curved joins |
-| `ModeButton.qml`, `HSlider.qml`, `UsageMeter.qml` | Switches, sliders, usage bars |
+| `HSlider.qml` | The volume slider |
 | `AgentMark.qml` | Any agent's mark, with the growing-circle "working" reveal |
 | `agents.py`, `claude_sessions.py`, `bell.sh` | Every agent's sessions: Claude's and Codex's from their own session files, the rest from their terminals; the bell note |
 | `Theme.qml`, `qmldir` | Colours from the current Omarchy theme, light and dark (the one singleton; qmldir lists every type) |
@@ -206,11 +235,12 @@ This does two things:
 
 - renders every state off screen, using made-up data, into PNGs to look through, in a dark theme and a light one (Catppuccin Latte): a crowd of agent sessions with long names, a dock on each screen edge, and the battery's number at every level
 - runs the pointer tests:
-  - the side strip: dragging from the grip, dragging from an icon (which must not click it), clicking, hovering, and Modes opening without moving the rows below, including upward near the bottom of the screen
   - the top notch: hover, and staying open when a panel closes under the pointer
+  - the editor: moving items between the corners and the notch, by dragging and by clicking, inserting before another, taking one off and putting it back, dropping outside (nothing changes), the open notch's cards, reordering its buttons, Frosted/Solid and Full screen, Reset, Done and Esc; and that what it saves is what was moved; the keyboard
+  - the corners: hover opens the player and a click on the seek bar seeks, the music corner going when nothing plays and staying while paused, hiding in full screen, staying shut while their panel is open, right-click opening the editor, the workspace dots (click and scroll), the privacy dots showing only while in use, the notifications card (what fits, Show all, Clear) and switching players
 
 Cover art only renders on a real screen.
 
-On a real screen, `omarchy-shell mike.notch previewToast` shows a toast, `omarchy-shell mike.notch open` and `close` open and shut the notch, and `omarchy-shell mike.notch sideState` prints what the side strip thinks is going on. `python3 agents.py --once` prints every agent session it finds, and `omarchy-shell mike.notch fontCheck` prints the font Omarchy's shell is drawing in.
+On a real screen, `omarchy-shell mike.notch previewToast` shows a toast, `omarchy-shell mike.notch edit` opens the editor, `omarchy-shell mike.notch netState` prints the network speed the bar sees, `omarchy-shell mike.notch cornersState` what the corners are doing, `omarchy-shell mike.notch cornerPanel wifi` opens a corner's panel as a click on its row does, `omarchy-shell mike.notch open` and `close` open and shut the notch, `workspacesState`, `privacyState` and `notificationsState` print what those see, and `previewLowBattery` shows the low-battery warning. `python3 agents.py --once` prints every agent session it finds, and `omarchy-shell mike.notch fontCheck` prints the font Omarchy's shell is drawing in.
 
-When scripting hovers with `hyprctl dispatch 'hl.dsp.cursor.move(...)'`, move straight onto the icon from outside the strip. Hyprland only reports a warp to a surface the pointer is entering, so stepping across the strip in several warps stalls where it came in. Omarchy focuses whatever window is under the pointer, so don't move it while someone is typing.
+When scripting hovers with `hyprctl dispatch 'hl.dsp.cursor.move(...)'`, move straight onto the target from outside its surface. Hyprland only reports a warp to a surface the pointer is entering, so stepping across one in several warps stalls where it came in. Omarchy focuses whatever window is under the pointer, so don't move it while someone is typing.

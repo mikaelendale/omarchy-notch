@@ -35,6 +35,9 @@ Rectangle {
       size: 62
       radius: 13
       source: root.available && root.media.artUrl ? root.media.artUrl : ""
+      // Click the cover to go to the player's window.
+      HoverHandler { enabled: root.available; cursorShape: Qt.PointingHandCursor }
+      TapHandler { enabled: root.available; onTapped: root.requested("raise") }
     }
 
     Column {

@@ -756,7 +756,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--notify", choices=["unfocused", "always", "off"], default="off")
+    # How often to look, in seconds: the notch asks for 3 while unplugged.
+    parser.add_argument("--interval", type=float, default=POLL_SECONDS)
     args = parser.parse_args(argv)
+    interval = max(0.5, min(30.0, args.interval))
 
     cs = load_claude_collector()
     notifier = cs.Notifier() if cs and args.notify != "off" and not args.once else None
@@ -804,7 +807,7 @@ def main(argv=None):
             last_text, last_emit = text, now
         if os.getppid() != parent:
             return 0
-        time.sleep(POLL_SECONDS)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":

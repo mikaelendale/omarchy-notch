@@ -3,8 +3,9 @@ import "Palette.js" as P
 
 // The top notch: one black slab at the top centre of the screen.
 //
-// Closed, it shows Claude's mark and the time, plus what's playing; it grows
-// wider for what's live (Claude waiting on you, music) the way a phone's
+// Closed, it shows the items the layout gives it (by default the agents' mark
+// and the time; the corners beside it hold music, Wi-Fi and the battery); it
+// grows wider for what's live (an agent waiting on you) the way a phone's
 // island does. Hovered, it opens downward into the full bar: the Omarchy menu,
 // the clock, and one fixed-width, scrollable row of round buttons (tray apps
 // and Omarchy's own widgets, lent by the bar plugin through traySlot and
@@ -30,6 +31,15 @@ Item {
   // notch grows into a toast for it, like a phone's incoming-call island.
   property var alert: null
 
+  // What the closed notch shows, in order (Layout.js); the corners show the rest.
+  property var items: ["agents", "clock"]
+  // The open notch's cards, in order: system, media, today, agents.
+  property var cards: ["system", "today", "agents"]
+  // The machine, for the system card (SystemCard.qml).
+  property var system: ({ ready: false })
+  // Notifications you've had, newest first, for the notifications card.
+  property var notifications: []
+
   // Where the bar plugin puts the menu, tray apps and Omarchy's widgets.
   readonly property alias menuSlot: menuSlotItem
   readonly property alias traySlot: traySlotItem
@@ -39,13 +49,28 @@ Item {
   signal sessionRequested(var session)
   signal conversationsRequested()
   signal alertDismissed()
+  // Right-click: edit what the bar shows.
+  signal editRequested()
+  signal notificationsCleared()
+  signal notificationsShowAll()
+  // A workspace was picked (a dot, or a number in the open notch).
+  signal workspaceRequested(int id)
 
   // ---- geometry
   readonly property real collapsedHeight: 34
-  readonly property real flare: 12
-  readonly property real expandedWidth: 840
+  // Attached (the default) hangs from the top edge and flares into it;
+  // floating is a pill of its own, a little below the edge (Bar.qml places it).
+  property bool floating: false
+  readonly property real flare: floating ? 0 : 12
+  // More cards need more room, and a long row of buttons more again; never
+  // more than the screen has (maxExpandedWidth, from the bar).
+  property real maxExpandedWidth: 1800
+  readonly property real topRowNeeds: 36 + topRow.leftUsed + 14 + clockLabel.implicitWidth + 16 + stripRow.implicitWidth
+  // Room for the cards: Today keeps 190, the others want about 260 each.
+  readonly property real cardsNeed: 28 + (cards.indexOf("today") !== -1 ? 190 : 0)
+    + cards.filter(function(c) { return c !== "today" }).length * 260 + Math.max(0, cards.length - 1) * 10
+  readonly property real expandedWidth: Math.min(maxExpandedWidth, Math.max(840, cardsNeed, topRowNeeds))
   readonly property real expandedHeight: 222
-  readonly property real stripWidth: 352
 
   property bool hoverOpen: false
   readonly property bool alertActive: !!alert
@@ -154,6 +179,7 @@ Item {
     bodyHeight: root.bodyH
     radius: root.bodyR
     flare: root.flare
+    floating: root.floating
     color: Theme.body
   }
 
@@ -169,8 +195,14 @@ Item {
       enabled: !root.open && !root.alertActive
       onTapped: { closeTimer.stop(); root.hoverOpen = true }
     }
+    TapHandler {
+      acceptedButtons: Qt.RightButton
+      onTapped: root.editRequested()
+    }
 
     // ---------------------------------------------------------- closed
+    // The items the layout puts in the notch (Layout.js; by default the
+    // agents' mark and the time), drawn small.
     Row {
       id: collapsedRow
       anchors.horizontalCenter: parent.horizontalCenter
@@ -180,99 +212,21 @@ Item {
       opacity: root.closedOpacity
       visible: opacity > 0
 
-      // Claude: its mark, cycling colours while a session works, yellow (with
-      // "needs you") while one waits on you.
-      Row {
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: 7
-        AgentMark {
-          anchors.verticalCenter: parent.verticalCenter
-          size: 18
-          agent: root.lead.agent || "claude"
-          working: root.lead.state === "working" || root.lead.state === "watching"
-          needs: root.lead.state === "needs"
+      Repeater {
+        model: root.items
+        StatusItem {
+          required property string modelData
+          anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+          itemId: modelData
+          status: root.status
+          media: root.media
+          now: root.now
+          clockFormat: root.clockFormat
           motion: root.motion
+          lead: root.lead
+          needsCount: root.needsCount
+          onWorkspaceRequested: function(id) { root.workspaceRequested(id) }
         }
-        Text {
-          visible: root.needsCount > 0
-          anchors.verticalCenter: parent.verticalCenter
-          text: root.needsCount === 1 ? "needs you" : root.needsCount + " need you"
-          textFormat: Text.PlainText
-          color: Theme.yellow
-          font.family: P.sans
-          font.pixelSize: 12
-          font.weight: Font.DemiBold
-        }
-      }
-
-      Text {
-        anchors.verticalCenter: parent.verticalCenter
-        text: Qt.formatTime(root.now, root.clockFormat)
-        textFormat: Text.PlainText
-        color: Theme.text
-        font.family: P.sans
-        font.pixelSize: 13
-        font.weight: Font.DemiBold
-        font.features: { "tnum": 1 }
-      }
-
-      // The music, while it plays: its cover and moving bars.
-      Item {
-        width: root.playing ? playingRow.implicitWidth : 0
-        height: parent.height
-        visible: width > 0
-        clip: true
-        Behavior on width { NumberAnimation { duration: 180 * root.motion; easing.type: Easing.BezierSpline; easing.bezierCurve: P.ease } }
-        Row {
-          id: playingRow
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: 8
-          CoverArt {
-            anchors.verticalCenter: parent.verticalCenter
-            size: 18
-            radius: 5
-            source: root.media && root.media.artUrl ? root.media.artUrl : ""
-          }
-          EqBars {
-            anchors.verticalCenter: parent.verticalCenter
-            playing: root.playing
-            motion: root.motion
-            color: Theme.green
-          }
-        }
-      }
-
-      // Wi-Fi (or wired) and the battery, like a phone's status bar.
-      Item {
-        readonly property var wifi: root.status && root.status.wifi ? root.status.wifi : ({ kind: "none" })
-        width: wifi.kind === "ethernet" ? wiredGlyph.implicitWidth : wifiIcon.width
-        height: parent.height
-        WifiIcon {
-          id: wifiIcon
-          visible: parent.wifi.kind !== "ethernet"
-          anchors.verticalCenter: parent.verticalCenter
-          size: 15
-          connected: parent.wifi.kind === "wifi"
-          strength: parent.wifi.strength || 0
-        }
-        Text {
-          id: wiredGlyph
-          visible: parent.wifi.kind === "ethernet"
-          anchors.verticalCenter: parent.verticalCenter
-          text: String.fromCodePoint(0xF0200)
-          textFormat: Text.PlainText
-          color: Theme.text
-          font.family: P.glyphs
-          font.pixelSize: 14
-        }
-      }
-      BatteryIcon {
-        readonly property var battery: root.status && root.status.battery ? root.status.battery : ({ present: false })
-        visible: !!battery.present
-        anchors.verticalCenter: parent.verticalCenter
-        size: 25
-        level: battery.level || 0
-        charging: !!battery.charging
       }
     }
 
@@ -365,12 +319,18 @@ Item {
       visible: opacity > 0
       enabled: root.open
 
-      // Top row: the menu, the clock, and the scrollable row of buttons.
+      // Top row: the menu, the clock, and the row of buttons. Nothing
+      // scrolls: the buttons fill in from the right, and when the right half
+      // can't hold them the clock moves beside the menu and they carry on
+      // into the left half. (The notch widens if even that isn't enough.)
       Item {
         id: topRow
         x: 18
         width: parent.width - 36
         height: 44
+
+        readonly property real rightHalf: width / 2 - clockLabel.implicitWidth / 2 - 16
+        readonly property bool clockCentered: stripRow.implicitWidth <= rightHalf
 
         Row {
           id: menuSlotItem
@@ -379,9 +339,49 @@ Item {
           spacing: 6
         }
 
+        // The workspaces, numbered, while their dots are in the notch: the
+        // open notch covers the dots, so here's where to pick one.
+        Row {
+          id: wsSwitcher
+          readonly property var dots: root.items.indexOf("workspaces") !== -1 && root.status && root.status.workspaces
+            ? root.status.workspaces : []
+          visible: dots.length > 0
+          x: menuSlotItem.width + (menuSlotItem.width > 0 ? 10 : 0)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: 4
+          Repeater {
+            model: wsSwitcher.dots
+            Rectangle {
+              required property var modelData
+              width: 26
+              height: 26
+              radius: 13
+              color: modelData.active ? Theme.text : (wsHover.hovered ? Theme.cardHover : "transparent")
+              border.width: modelData.active ? 0 : 1
+              border.color: modelData.occupied ? Theme.secondary : Theme.hairline
+              Text {
+                anchors.centerIn: parent
+                text: String(parent.modelData.slot)
+                textFormat: Text.PlainText
+                color: parent.modelData.active ? Theme.onText : (parent.modelData.occupied ? Theme.text : Theme.tertiary)
+                font.family: P.sans
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+                font.features: { "tnum": 1 }
+              }
+              HoverHandler { id: wsHover; cursorShape: Qt.PointingHandCursor }
+              TapHandler { onTapped: root.workspaceRequested(parent.modelData.id) }
+            }
+          }
+        }
+        readonly property real leftUsed: wsSwitcher.visible ? wsSwitcher.x + wsSwitcher.width : menuSlotItem.width
+
         Text {
           id: clockLabel
-          anchors.centerIn: parent
+          x: topRow.clockCentered && Math.round((topRow.width - implicitWidth) / 2) > topRow.leftUsed + 14
+            ? Math.round((topRow.width - implicitWidth) / 2)
+            : topRow.leftUsed + (topRow.leftUsed > 0 ? 14 : 0)
+          anchors.verticalCenter: parent.verticalCenter
           text: Qt.formatTime(root.now, root.clockFormat)
           textFormat: Text.PlainText
           color: Theme.text
@@ -391,82 +391,99 @@ Item {
           font.features: { "tnum": 1 }
         }
 
-        // A fixed width: what doesn't fit scrolls (wheel or drag), nothing
-        // hides in a drawer. It simply clips at its ends; a painted fade would
-        // tint the frost behind it.
         Item {
           id: strip
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          width: Math.min(root.stripWidth, stripRow.implicitWidth)
+          width: Math.max(0, Math.min(stripRow.implicitWidth, topRow.width - (clockLabel.x + clockLabel.implicitWidth + 16)))
           height: 34
+          // Only ever cuts anything on a screen too narrow for the widest notch.
           clip: true
 
-          Flickable {
-            id: stripFlick
-            anchors.fill: parent
-            contentWidth: stripRow.implicitWidth
-            contentHeight: height
-            flickableDirection: Flickable.HorizontalFlick
-            boundsBehavior: Flickable.StopAtBounds
-            interactive: contentWidth > width
-
+          Row {
+            id: stripRow
+            anchors.right: parent.right
+            height: parent.height
+            spacing: 6
             Row {
-              id: stripRow
-              height: stripFlick.height
+              id: statusSlotItem
+              anchors.verticalCenter: parent.verticalCenter
               spacing: 6
-              Row {
-                id: statusSlotItem
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 6
-              }
-              Row {
-                id: traySlotItem
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 6
-              }
             }
-          }
-          WheelHandler {
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: function(event) {
-              var delta = event.angleDelta.x !== 0 ? event.angleDelta.x : event.angleDelta.y
-              var max = Math.max(0, stripFlick.contentWidth - stripFlick.width)
-              stripFlick.contentX = Math.max(0, Math.min(max, stripFlick.contentX - delta * 0.6))
+            Row {
+              id: traySlotItem
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: 6
             }
           }
         }
       }
 
-      // Cards.
+      // Cards, as the layout lists them (by default the machine, today and the
+      // agents; the music lives in its corner). Today keeps its size; the
+      // others share the rest of the row.
       Row {
+        id: cardRow
         x: 14
         y: topRow.height + 4
         spacing: 10
         readonly property real cardHeight: root.expandedHeight - y - 14
+        readonly property real rowWidth: root.expandedWidth - 28
+        readonly property int flexible: root.cards.filter(function(c) { return c !== "today" }).length
+        readonly property real todayWidth: root.cards.indexOf("today") !== -1 ? (flexible > 0 ? 190 : rowWidth) : 0
+        readonly property real flexWidth: flexible > 0
+          ? (rowWidth - todayWidth - spacing * Math.max(0, root.cards.length - 1)) / flexible : 0
 
-        MediaCard {
-          width: 330
-          height: parent.cardHeight
-          media: root.media
-          motion: root.motion
-          onRequested: function(action) { root.mediaRequested(action) }
-        }
-        TodayCard {
-          width: 190
-          height: parent.cardHeight
-          now: root.now
-        }
-        ClaudeCard {
-          defaultAgent: root.defaultAgent
-          width: root.expandedWidth - 28 - 330 - 190 - 20
-          height: parent.cardHeight
-          claude: root.claude
-          motion: root.motion
-          onSessionRequested: function(session) { root.sessionRequested(session) }
-          onConversationsRequested: root.conversationsRequested()
+        Repeater {
+          model: root.cards
+          Loader {
+            required property string modelData
+            width: modelData === "today" ? cardRow.todayWidth : cardRow.flexWidth
+            height: cardRow.cardHeight
+            sourceComponent: ({ system: systemCard, notifications: notificationsCard, media: mediaCard, today: todayCard, agents: agentsCard })[modelData] || null
+          }
         }
       }
+    }
+  }
+
+  Component {
+    id: systemCard
+    SystemCard {
+      system: root.system
+      motion: root.motion
+    }
+  }
+  Component {
+    id: notificationsCard
+    NotificationsCard {
+      notifications: root.notifications
+      now: root.now
+      motion: root.motion
+      onCleared: root.notificationsCleared()
+      onShowAll: root.notificationsShowAll()
+    }
+  }
+  Component {
+    id: mediaCard
+    MediaCard {
+      media: root.media
+      motion: root.motion
+      onRequested: function(action) { root.mediaRequested(action) }
+    }
+  }
+  Component {
+    id: todayCard
+    TodayCard { now: root.now }
+  }
+  Component {
+    id: agentsCard
+    ClaudeCard {
+      defaultAgent: root.defaultAgent
+      claude: root.claude
+      motion: root.motion
+      onSessionRequested: function(session) { root.sessionRequested(session) }
+      onConversationsRequested: root.conversationsRequested()
     }
   }
 }
