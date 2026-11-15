@@ -685,7 +685,8 @@ Item {
             font.weight: Font.DemiBold
           }
           Text {
-            text: "Windows go under the notch"
+            text: root.glass === "solid" ? "Windows go under the notch; the corners hide"
+              : "Windows go under the notch, which fades while idle"
             textFormat: Text.PlainText
             color: Theme.secondary
             font.family: P.sans

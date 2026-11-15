@@ -1329,8 +1329,8 @@ Item {
       color: "transparent"
       // Full screen (the editor's switch): no reserved strip, every window
       // gets the whole screen and the notch sits over it like a camera notch,
-      // see-through until it's used. Otherwise the notch keeps a strip and
-      // windows start below it.
+      // see-through until it's used (unless the look is Solid: then it stays
+      // solid). Otherwise the notch keeps a strip and windows start below it.
       exclusionMode: root.windowsUnderNotch || root.barHidden ? ExclusionMode.Ignore : ExclusionMode.Normal
       exclusiveZone: root.windowsUnderNotch ? 0 : notch.collapsedHeight + root.topGap
       margins.top: root.barHidden ? -implicitHeight : 0
@@ -1372,7 +1372,7 @@ Item {
         alert: root.alert
         onAlertDismissed: root.alert = null
         notificationsShowing: root.notificationsShowing
-        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase
+        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase && root.glass !== "solid"
         defaultAgent: root.defaultAgent
         forceOpen: root.pinned && (Quickshell.screens.length <= 1 || win.screenName === root.focusedScreenName())
         hold: win.holdsPopout || win.summonHold
@@ -1415,7 +1415,7 @@ Item {
         motion: root.motion
         lead: root.lead
         counts: root.claude.counts
-        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase
+        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase && root.glass !== "solid"
         onOpenChanged: root.openCorners = Math.max(0, root.openCorners + (open ? 1 : -1))
         Component.onDestruction: if (open) root.openCorners = Math.max(0, root.openCorners - 1)
         onMediaRequested: function(action, value) { root.mediaAction(action, value) }
@@ -1441,7 +1441,7 @@ Item {
         motion: root.motion
         lead: root.lead
         counts: root.claude.counts
-        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase
+        seeThroughWhenIdle: root.windowsUnderNotch && !root.showcase && root.glass !== "solid"
         onOpenChanged: root.openCorners = Math.max(0, root.openCorners + (open ? 1 : -1))
         Component.onDestruction: if (open) root.openCorners = Math.max(0, root.openCorners - 1)
         onMediaRequested: function(action, value) { root.mediaAction(action, value) }
