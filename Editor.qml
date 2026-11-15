@@ -17,7 +17,8 @@ Item {
   // The open notch's buttons (Omarchy's widgets), in order: [{ id, name }].
   property var buttons: []
   property string glass: "frosted"          // "frosted" | "solid"
-  property bool floating: false              // the notch and corners float below the edge
+  property string barStyle: "attached"      // "attached" | "floating" | "unified"
+  property bool allAgents: false             // every running agent in the closed notch
   // Every screen ([{ id, name }]), and the one the corners show on ("" = all).
   property var screens: []
   property string cornerScreen: ""
@@ -34,7 +35,8 @@ Item {
   // A button moved to `index` in the row (counted without it).
   signal buttonMoved(string id, int index)
   signal glassRequested(string glass)
-  signal floatingRequested(bool on)
+  signal styleRequested(string style)
+  signal allAgentsRequested(bool on)
   signal cornerScreenRequested(string name)
   signal fullScreenRequested(bool on)
   signal closeRequested()
@@ -55,11 +57,13 @@ Item {
   property string pickedKind: ""
 
   readonly property var base: Layout.normalize(layout)
-  readonly property var shown: (dragKind === "item" || dragKind === "card") && preview ? preview : base
+  readonly property var shown: dragKind && preview ? preview : base
   readonly property var unused: Layout.unused(shown)
   readonly property var unusedCards: Layout.unusedCards(shown)
+  // The open notch's buttons, less the ones placed on the closed bar.
   readonly property var shownButtons: {
-    var list = (buttons || []).slice()
+    var placedIds = Layout.placedWidgets(shown)
+    var list = (buttons || []).filter(function(b) { return placedIds.indexOf(b.id) === -1 })
     if (dragKind !== "button" || buttonIndex < 0) return list
     var from = -1
     for (var i = 0; i < list.length; i++) if (list[i].id === dragId) from = i
@@ -94,13 +98,24 @@ Item {
     var q = item.mapFromItem(root, p.x, p.y)
     return q.x >= -margin && q.y >= -margin && q.x <= item.width + margin && q.y <= item.height + margin
   }
-  // The place under the pointer for a thing of this kind.
-  function zoneAt(kind, p) {
-    if (kind === "item") {
+  // A widget's name, from the open notch's buttons ("w:<id>" or the bare id).
+  function widgetName(id) {
+    var wid = Layout.isWidget(id) ? Layout.widgetOf(id) : String(id)
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].id === wid) return buttons[i].name
+    return wid
+  }
+  // The place under the pointer for a thing of this kind. The open notch's
+  // buttons (Omarchy's widgets, a third party's too) can go on the closed bar
+  // as well, and a widget placed there back to the buttons.
+  function zoneAt(kind, p, id) {
+    if (kind === "item" || kind === "button") {
       if (inside(leftZone, p, 14)) return "left"
       if (inside(rightZone, p, 14)) return "right"
       if (inside(centerZone, p, 14)) return "center"
+    }
+    if (kind === "item") {
       if (inside(moreZone, p, 8)) return "more"
+      if (Layout.isWidget(id) && inside(buttonZone, p, 24)) return "buttons"
     } else if (kind === "card") {
       if (inside(cardZone, p, 14)) return "cards"
       if (inside(moreCardZone, p, 14)) return "moreCards"
@@ -124,13 +139,14 @@ Item {
   // The layout with `id` put where the pointer is; null if that's no place
   // for it.
   function placed(kind, id, p) {
-    var zone = zoneAt(kind, p)
-    if (kind === "item") {
+    var zone = zoneAt(kind, p, id)
+    if (kind === "item" || kind === "button") {
+      var item = kind === "button" ? "w:" + id : id
       if (zone === "left" || zone === "center" || zone === "right") {
         var rep = zone === "left" ? leftChips : zone === "center" ? centerChips : rightChips
-        return Layout.moved(base, id, zone, indexIn(rep, p, id))
+        return Layout.moved(base, item, zone, indexIn(rep, p, item))
       }
-      if (zone === "more") return Layout.moved(base, id, "", 0)
+      if (kind === "item" && (zone === "more" || zone === "buttons")) return Layout.moved(base, id, "", 0)
     } else if (kind === "card") {
       if (zone === "cards") return Layout.movedCard(base, id, indexIn(cardChips, p, id))
       if (zone === "moreCards") return Layout.movedCard(base, id, -1)
@@ -139,9 +155,14 @@ Item {
   }
   function updateDrag() {
     var p = dragPoint
-    targetZone = zoneAt(dragKind, p)
-    if (dragKind === "item" || dragKind === "card") preview = placed(dragKind, dragId, p) || base
-    else if (dragKind === "button") buttonIndex = targetZone ? indexIn(buttonChips, p, dragId) : -1
+    targetZone = zoneAt(dragKind, p, dragId)
+    if (dragKind === "button" && targetZone === "buttons") {
+      preview = null
+      buttonIndex = indexIn(buttonChips, p, dragId)
+    } else {
+      buttonIndex = -1
+      preview = placed(dragKind, dragId, p) || base
+    }
   }
   function buttonFrom(id) {
     for (var i = 0; i < buttons.length; i++) if (buttons[i].id === id) return i
@@ -155,7 +176,7 @@ Item {
     }
   }
   function endDrag() {
-    if ((dragKind === "item" || dragKind === "card") && preview && !Layout.same(preview, layout)) {
+    if (preview && !Layout.same(preview, layout)) {
       log("dropped " + dragId + " in " + targetZone)
       root.edited(preview)
     } else if (dragKind === "button" && buttonIndex >= 0) {
@@ -178,9 +199,12 @@ Item {
   function clicked(p, chip) {
     if (pickedId) {
       if (chip && chip.chipId === pickedId && chip.kind === pickedKind) { pick(null); return }
-      if (pickedKind === "button") {
-        if (zoneAt("button", p)) { commitButton(pickedId, indexIn(buttonChips, p, pickedId)); pick(null); return }
-      } else {
+      if (pickedKind === "button" && zoneAt("button", p, pickedId) === "buttons") {
+        commitButton(pickedId, indexIn(buttonChips, p, pickedId))
+        pick(null)
+        return
+      }
+      {
         var next = placed(pickedKind, pickedId, p)
         if (next) {
           if (!Layout.same(next, layout)) { log("moved " + pickedId + " to " + zoneAt(pickedKind, p)); root.edited(next) }
@@ -243,11 +267,23 @@ Item {
       else if (pos < 0) { if (delta < 0) next = Layout.movedCard(base, id, cards.length) }
       else if (pos + delta >= cards.length) next = Layout.movedCard(base, id, -1)
       else if (pos + delta >= 0) next = Layout.movedCard(base, id, pos + delta)
-    } else if (kind === "button" && !vertical) {
-      var from = buttonFrom(id)
-      var to = from + delta
-      if (from >= 0 && to >= 0 && to < buttons.length) commitButton(id, to)
-      return
+    } else if (kind === "button") {
+      if (vertical && delta < 0) {
+        // Up: onto the closed notch.
+        next = Layout.moved(base, "w:" + id, "center", base.center.length)
+        pickedId = "w:" + id
+        pickedKind = "item"
+      } else if (!vertical) {
+        var from = buttonFrom(id)
+        var to = from + delta
+        if (from >= 0 && to >= 0 && to < buttons.length) commitButton(id, to)
+        return
+      }
+    }
+    // A placed widget taken off goes back to the buttons.
+    if (kind === "item" && Layout.isWidget(id) && next && Layout.placedWidgets(next).indexOf(Layout.widgetOf(id)) === -1) {
+      pickedId = Layout.widgetOf(id)
+      pickedKind = "button"
     }
     if (next && !Layout.same(next, layout)) { log("moved " + id + " with the keyboard"); root.edited(next) }
   }
@@ -287,6 +323,8 @@ Item {
     color: Theme.body
     border.width: 1
     border.color: Theme.edge
+    // A click on the card's empty space stays on it (beside it closes the editor).
+    MouseArea { anchors.fill: parent }
   }
 
   Column {
@@ -417,26 +455,51 @@ Item {
       }
     }
 
-    // ---- which screens get the corners (with more than one)
-    Item { width: 1; height: root.screens.length > 1 ? 10 : 0 }
-    Row {
-      visible: root.screens.length > 1
-      height: visible ? 36 : 0
-      spacing: 12
-      Text {
+    // ---- which screens get the corners (with more than one), and every
+    // running agent in the closed notch
+    Item { width: 1; height: 10 }
+    Item {
+      width: parent.width
+      height: 36
+      Row {
+        visible: root.screens.length > 1
         anchors.verticalCenter: parent.verticalCenter
-        text: "Corners show on"
-        textFormat: Text.PlainText
-        color: Theme.secondary
-        font.family: P.sans
-        font.pixelSize: 12
-        font.weight: Font.DemiBold
+        spacing: 12
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Corners show on"
+          textFormat: Text.PlainText
+          color: Theme.secondary
+          font.family: P.sans
+          font.pixelSize: 12
+          font.weight: Font.DemiBold
+        }
+        Segmented {
+          anchors.verticalCenter: parent.verticalCenter
+          options: [{ id: "", name: "Every screen" }].concat(root.screens)
+          current: root.cornerScreen
+          onPicked: function(id) { root.log("corners on " + (id || "every screen")); root.cornerScreenRequested(id) }
+        }
       }
-      Segmented {
+      Row {
+        anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        options: [{ id: "", name: "Every screen" }].concat(root.screens)
-        current: root.cornerScreen
-        onPicked: function(id) { root.log("corners on " + (id || "every screen")); root.cornerScreenRequested(id) }
+        spacing: 10
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Show every running agent"
+          textFormat: Text.PlainText
+          color: Theme.secondary
+          font.family: P.sans
+          font.pixelSize: 12
+          font.weight: Font.DemiBold
+        }
+        Switch {
+          objectName: "allAgentsSwitch"
+          anchors.verticalCenter: parent.verticalCenter
+          on: root.allAgents
+          onToggled: { root.log("every agent " + !root.allAgents); root.allAgentsRequested(!root.allAgents) }
+        }
       }
     }
 
@@ -640,9 +703,9 @@ Item {
         onPicked: function(id) { root.log("look " + id); root.glassRequested(id) }
       }
       Segmented {
-        options: [{ id: "attached", name: "Attached" }, { id: "floating", name: "Floating" }]
-        current: root.floating ? "floating" : "attached"
-        onPicked: function(id) { root.log("notch " + id); root.floatingRequested(id === "floating") }
+        options: [{ id: "attached", name: "Attached" }, { id: "floating", name: "Floating" }, { id: "unified", name: "Unified" }]
+        current: root.barStyle
+        onPicked: function(id) { root.log("style " + id); root.styleRequested(id) }
       }
 
       // Full screen: windows under the notch, the corners hidden.
@@ -731,8 +794,10 @@ Item {
     EditorChip {
       required property string modelData
       chipId: modelData
-      label: Layout.names[modelData] || modelData
-      compact: true
+      label: Layout.isWidget(modelData) ? root.widgetName(modelData) : (Layout.names[modelData] || modelData)
+      // A placed widget: its name (the editor doesn't run the widget itself).
+      showIcon: !Layout.isWidget(modelData)
+      compact: !Layout.isWidget(modelData)
       wide: true
       onImplicitWidthChanged: root.chipRevision++
       Component.onCompleted: root.chipRevision++
@@ -754,8 +819,10 @@ Item {
     EditorChip {
       required property string modelData
       chipId: modelData
-      label: Layout.names[modelData] || modelData
-      compact: true
+      label: Layout.isWidget(modelData) ? root.widgetName(modelData) : (Layout.names[modelData] || modelData)
+      // A placed widget: its name (the editor doesn't run the widget itself).
+      showIcon: !Layout.isWidget(modelData)
+      compact: !Layout.isWidget(modelData)
       onImplicitWidthChanged: root.chipRevision++
       Component.onCompleted: root.chipRevision++
       Component.onDestruction: root.chipRevision++
@@ -878,9 +945,14 @@ Item {
       overZone = root.pickedId ? root.zoneAt(root.pickedKind, p) : ""
     }
     onPressed: function(mouse) {
+      var at = Qt.point(mouse.x, mouse.y)
+      var chip = root.chipAt(at)
+      // Not on a chip, with nothing picked up: the press is for whatever is
+      // under it (the switches and choices on the card).
+      if (!chip && !root.pickedId) { mouse.accepted = false; return }
       pressing = true
-      pressAt = Qt.point(mouse.x, mouse.y)
-      pressedChip = root.chipAt(pressAt)
+      pressAt = at
+      pressedChip = chip
     }
     onReleased: function(mouse) {
       var wasDragging = !!root.dragId
@@ -904,9 +976,9 @@ Item {
     visible: root.dragId !== ""
     chipId: root.dragId
     kind: root.dragKind || "item"
-    showIcon: root.dragKind === "item"
+    showIcon: root.dragKind === "item" && !Layout.isWidget(root.dragId)
     label: {
-      if (root.dragKind === "item") return Layout.names[root.dragId] || root.dragId
+      if (root.dragKind === "item") return Layout.isWidget(root.dragId) ? root.widgetName(root.dragId) : (Layout.names[root.dragId] || root.dragId)
       if (root.dragKind === "card") return Layout.cardNames[root.dragId] || root.dragId
       for (var i = 0; i < root.buttons.length; i++) if (root.buttons[i].id === root.dragId) return root.buttons[i].name
       return root.dragId
@@ -923,6 +995,32 @@ Item {
   }
 
   // ---- pieces
+  // An on/off switch.
+  component Switch: Rectangle {
+    id: sw
+    property bool on: false
+    signal toggled()
+    width: 40
+    height: 24
+    radius: 12
+    color: on ? Theme.green : Theme.cardHover
+    Behavior on color { ColorAnimation { duration: 120 } }
+    Rectangle {
+      width: 18
+      height: 18
+      radius: 9
+      y: 3
+      x: sw.on ? sw.width - width - 3 : 3
+      color: "#ffffff"
+      Behavior on x { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+    }
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: sw.toggled()
+    }
+  }
+
   // Two or more choices in one pill; the chosen one filled.
   component Segmented: Rectangle {
     id: seg

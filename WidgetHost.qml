@@ -22,6 +22,9 @@ Item {
   property bool register: true
   // Widgets to leave out of the row (their items show in a corner).
   property var hiddenIds: []
+  // Bare: placed on the closed bar (a corner or the notch) by the editor, so
+  // no round button behind it, and only as big as it is.
+  property bool bare: false
 
   readonly property string widgetId: Util.canonicalWidgetId(String(modelData && modelData.id || ""))
   readonly property var registryComponent: {
@@ -49,17 +52,19 @@ Item {
   readonly property bool hiddenHere: (hiddenIds || []).indexOf(widgetId) !== -1
   readonly property bool shown: !hiddenHere
     && !!loader.item && loader.item.visible && (custom || loader.item.implicitWidth > 0)
-  readonly property real chipWidth: custom ? (icon === "battery" ? ((st.battery || {}).charging ? 56 : 48) : 32) : Math.max(32, Math.ceil(loader.width) + 12)
+  readonly property real chipWidth: bare
+    ? (custom ? (icon === "battery" ? ((st.battery || {}).charging ? 36 : 28) : 20) : Math.ceil(loader.width))
+    : (custom ? (icon === "battery" ? ((st.battery || {}).charging ? 56 : 48) : 32) : Math.max(32, Math.ceil(loader.width) + 12))
 
-  width: shown ? chipWidth + 6 : 0
-  height: 32
+  width: shown ? chipWidth + (bare ? 0 : 6) : 0
+  height: bare ? Math.max(22, custom ? 22 : Math.ceil(loader.height)) : 32
   anchors.verticalCenter: parent ? parent.verticalCenter : undefined
 
   Rectangle {
     width: root.chipWidth
     height: 32
     radius: 16
-    visible: root.shown
+    visible: root.shown && !root.bare
     color: hover.hovered ? Theme.cardHover : Theme.card
     scale: hover.hovered ? 1.04 : 1
     Behavior on color { ColorAnimation { duration: 120 } }
@@ -70,7 +75,7 @@ Item {
   Item {
     visible: root.shown && root.custom
     width: root.chipWidth
-    height: 32
+    height: root.bare ? root.height : 32
 
     WifiIcon {
       visible: root.icon === "wifi" && (root.st.wifi || {}).kind !== "ethernet"
@@ -138,8 +143,8 @@ Item {
     // A widget with a stand-in icon fills the button, invisibly; the rest
     // keep their own size and look.
     width: root.custom ? root.chipWidth : implicitWidth
-    height: root.custom ? 32 : implicitHeight
-    x: root.custom ? 0 : (root.chipWidth - width) / 2
+    height: root.custom ? (root.bare ? root.height : 32) : implicitHeight
+    x: root.custom || root.bare ? 0 : (root.chipWidth - width) / 2
     anchors.verticalCenter: parent.verticalCenter
     // Left out of the row: there, but invisible and out of the pointer's way.
     opacity: root.custom || root.hiddenHere ? 0 : 1

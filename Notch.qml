@@ -62,6 +62,13 @@ Item {
   // floating is a pill of its own, a little below the edge (Bar.qml places it).
   property bool floating: false
   readonly property real flare: floating ? 0 : 12
+  // Unified: the bar draws one strip across the top; the notch's own body
+  // only shows below it, as it opens.
+  property bool unified: false
+  // Bar widgets placed in the closed notch, and every running agent.
+  property var widgetFactory: null
+  property bool allAgents: false
+  readonly property alias closedRowItem: collapsedRow
   // More cards need more room, and a long row of buttons more again; never
   // more than the screen has (maxExpandedWidth, from the bar).
   property real maxExpandedWidth: 1800
@@ -167,16 +174,25 @@ Item {
     interval: 650
     onTriggered: if (!hover.hovered) root.hoverOpen = false
   }
-  onHoveredChanged: {
-    if (hovered) { closeTimer.stop(); releaseTimer.stop(); openTimer.restart() }
+  // Over a placed widget the notch stays shut, so the widget can be used.
+  function closedItemAt(x) {
+    var q = collapsedRow.mapFromItem(hit, x, 0)
+    var item = collapsedRow.childAt(q.x, collapsedRow.height / 2)
+    return item && item.itemId ? item.itemId : ""
+  }
+  readonly property bool wantsOpen: hovered && (open || closedItemAt(hover.point.position.x).indexOf("w:") !== 0)
+  onWantsOpenChanged: {
+    if (wantsOpen) { closeTimer.stop(); releaseTimer.stop(); openTimer.restart() }
     else { openTimer.stop(); closeTimer.restart() }
   }
 
   NotchShape {
     id: shape
     anchors.horizontalCenter: parent.horizontalCenter
+    y: root.unified ? root.collapsedHeight : 0
+    visible: bodyHeight > 0.5
     bodyWidth: root.bodyW
-    bodyHeight: root.bodyH
+    bodyHeight: root.unified ? Math.max(0, root.bodyH - root.collapsedHeight) : root.bodyH
     radius: root.bodyR
     flare: root.flare
     floating: root.floating
@@ -193,7 +209,12 @@ Item {
     HoverHandler { id: hover }
     TapHandler {
       enabled: !root.open && !root.alertActive
-      onTapped: { closeTimer.stop(); root.hoverOpen = true }
+      onTapped: function(point) {
+        // A click on a placed widget is the widget's.
+        if (root.closedItemAt(point.position.x).indexOf("w:") === 0) return
+        closeTimer.stop()
+        root.hoverOpen = true
+      }
     }
     TapHandler {
       acceptedButtons: Qt.RightButton
@@ -225,6 +246,9 @@ Item {
           motion: root.motion
           lead: root.lead
           needsCount: root.needsCount
+          widgetFactory: root.widgetFactory
+          sessions: root.sessionList
+          allAgents: root.allAgents
           onWorkspaceRequested: function(id) { root.workspaceRequested(id) }
         }
       }

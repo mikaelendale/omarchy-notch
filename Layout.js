@@ -1,8 +1,10 @@
 .pragma library
 
 // What the top bar can show, and where: the left corner, the notch, or the
-// right corner; and which cards the open notch shows. The layout is saved in
-// prefs.json as
+// right corner; and which cards the open notch shows. Besides the items
+// below, any of Omarchy's bar widgets (a third party's too) can be placed, as
+// "w:<widget id>"; it then leaves the open notch's row of buttons. The layout
+// is saved in prefs.json as
 //   { left: [ids], center: [ids], right: [ids], cards: [ids] }
 // and edited with the notch's editor (right-click the notch or a corner).
 
@@ -53,6 +55,19 @@ function defaults() {
            cards: ["system", "notifications", "agents"] }
 }
 
+// A bar widget placed on the bar: "w:com.robi.workspace-grid".
+function isWidget(id) { return /^w:[A-Za-z0-9._-]+$/.test(String(id)) }
+function widgetOf(id) { return isWidget(id) ? String(id).slice(2) : "" }
+// Every widget placed anywhere, by its widget id.
+function placedWidgets(layout) {
+  var out = []
+  for (var z = 0; z < zones.length; z++) {
+    var list = toList(layout[zones[z]])
+    for (var i = 0; i < list.length; i++) if (isWidget(list[i])) out.push(widgetOf(list[i]))
+  }
+  return out
+}
+
 // Unknown ids are dropped and each item shows in one place only, so a
 // hand-edited or older prefs.json can't break the bar.
 function normalize(raw) {
@@ -64,7 +79,7 @@ function normalize(raw) {
     var list = toList(raw[zones[z]])
     for (var i = 0; i < list.length; i++) {
       var id = String(list[i])
-      if (!names[id] || seen[id]) continue
+      if ((!names[id] && !isWidget(id)) || seen[id]) continue
       seen[id] = true
       out[zones[z]].push(id)
       any = true

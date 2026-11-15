@@ -40,6 +40,13 @@ Item {
   // instead of tucked into the corner.
   property bool floating: false
   readonly property real inset: floating ? 8 : 0
+  // Unified: the bar draws one strip across the top; this corner's own body
+  // only shows when it opens, hanging from that strip.
+  property bool unified: false
+  // Bar widgets placed here, and every running agent (see StatusItem).
+  property var widgetFactory: null
+  property var sessions: []
+  property bool allAgents: false
   // The open notch reaches over this corner: step aside until it closes.
   property bool covered: false
 
@@ -62,6 +69,7 @@ Item {
   // ---- what's showing
   readonly property bool mediaAvailable: !!(media && media.available)
   readonly property var shownItems: (items || []).filter(function(id) {
+    if (String(id).indexOf("w:") === 0) return !!root.widgetFactory
     if (id === "media") return root.mediaAvailable
     if (id === "battery") return !!(root.status && root.status.battery && root.status.battery.present)
     if (id === "privacy") {
@@ -73,7 +81,9 @@ Item {
   })
   readonly property bool shown: !suppressed && shownItems.length > 0
   readonly property bool hasMedia: shownItems.indexOf("media") !== -1
-  readonly property var detailItems: shownItems.filter(function(id) { return id !== "media" })
+  // Placed widgets have no details of their own: they're clicked where they are.
+  readonly property var detailItems: shownItems.filter(function(id) { return id !== "media" && String(id).indexOf("w:") !== 0 })
+  readonly property bool canOpen: hasMedia || detailItems.length > 0
 
   // ---- geometry
   readonly property real collapsedHeight: 34
@@ -93,7 +103,7 @@ Item {
   Behavior on presence { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
 
   property bool hoverOpen: false
-  readonly property bool open: shown && !holdClosed && (forceOpen || hoverOpen)
+  readonly property bool open: shown && canOpen && !holdClosed && (forceOpen || hoverOpen)
   property real progress: open ? 1 : 0
   Behavior on progress { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
 
@@ -119,8 +129,10 @@ Item {
   // ---- hover: a short dwell to open, a short grace to close
   Timer { id: openTimer; interval: 60; onTriggered: root.hoverOpen = true }
   Timer { id: closeTimer; interval: 180; onTriggered: if (!hover.hovered) root.hoverOpen = false }
-  onHoveredChanged: {
-    if (hovered) { closeTimer.stop(); openTimer.restart() }
+  // Over a placed widget the corner stays shut, so the widget can be used.
+  readonly property bool wantsOpen: hover.hovered && (open || closedItemAt(hover.point.position.x).indexOf("w:") !== 0)
+  onWantsOpenChanged: {
+    if (wantsOpen) { closeTimer.stop(); openTimer.restart() }
     else { openTimer.stop(); closeTimer.restart() }
   }
   onShownChanged: if (!shown) hoverOpen = false
@@ -140,6 +152,7 @@ Item {
     var id = closedItemAt(x)
     if (id === "media") return "tracks"
     if (id === "workspaces") return "workspaces"
+    if (id.indexOf("w:") === 0) return ""
     return "volume"
   }
   // The closed row's item at x (in the body's coordinates), or "".
@@ -164,11 +177,11 @@ Item {
 
   EarShape {
     x: root.mirrored ? root.width - width - root.inset : root.inset
-    y: root.inset
+    y: root.unified ? root.collapsedHeight : root.inset
     floating: root.floating
     mirrored: root.mirrored
     bodyWidth: root.bodyW
-    bodyHeight: root.bodyH
+    bodyHeight: root.unified ? Math.max(0, root.bodyH - root.collapsedHeight) : root.bodyH
     radius: root.bodyR
     flare: root.flare * root.presence
   }
@@ -204,6 +217,7 @@ Item {
       onWheel: function(event) {
         var delta = event.angleDelta.y !== 0 ? event.angleDelta.y : -event.angleDelta.x
         var kind = root.kindAt(point.position.x, point.position.y)
+        if (kind === "") return
         if (kind !== root.wheelKind) { root.wheelKind = kind; root.wheelSum = 0 }
         root.wheelSum += delta
         var steps = root.wheelSum > 0 ? Math.floor(root.wheelSum / 120) : Math.ceil(root.wheelSum / 120)
@@ -244,6 +258,9 @@ Item {
           motion: root.motion
           lead: root.lead
           needsCount: root.needsCount
+          widgetFactory: root.widgetFactory
+          sessions: root.sessions
+          allAgents: root.allAgents
           onWorkspaceRequested: function(id) { root.workspaceRequested(id) }
         }
       }

@@ -28,6 +28,33 @@ Item {
   // A workspace dot was clicked.
   signal workspaceRequested(int id)
 
+  // A bar widget placed here by the editor ("w:<widget id>"): the bar hands
+  // over a function that puts Omarchy's widget into a given item.
+  property var widgetFactory: null
+  readonly property bool isWidget: itemId.indexOf("w:") === 0
+
+  // Every running agent, not just the one that matters most (the editor's
+  // "Show every running agent"): sessions from the bar.
+  property var sessions: []
+  property bool allAgents: false
+  readonly property var agentGroups: {
+    if (!allAgents) return []
+    var order = { needs: 0, working: 1, watching: 1 }
+    var byAgent = ({})
+    var out = []
+    var list = sessions || []
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i]
+      if (!s || !(s.state in order)) continue
+      var a = String(s.agent || "claude")
+      if (!byAgent[a]) { byAgent[a] = { agent: a, state: s.state, count: 0 }; out.push(byAgent[a]) }
+      byAgent[a].count++
+      if (order[s.state] < order[byAgent[a].state]) byAgent[a].state = s.state
+    }
+    out.sort(function(x, y) { return order[x.state] - order[y.state] })
+    return out.slice(0, 4)
+  }
+
   readonly property var privacyState: status && status.privacy ? status.privacy : ({})
   readonly property bool privacyOn: !!(privacyState.mic || privacyState.camera || privacyState.screen)
 
@@ -41,6 +68,7 @@ Item {
     if (itemId === "battery") return !!(status && status.battery && status.battery.present)
     if (itemId === "privacy") return privacyOn
     if (itemId === "workspaces") return !!(status && status.workspaces && status.workspaces.length > 0)
+    if (isWidget) return !!widgetFactory
     return itemId !== ""
   }
 
@@ -48,7 +76,10 @@ Item {
   implicitHeight: 22
   width: implicitWidth
   height: implicitHeight
-  visible: implicitWidth > 0
+  // A placed widget stays visible even at no width: Omarchy's widgets only
+  // take their width once they can see they're visible, so hiding the empty
+  // slot would keep them hidden for good.
+  visible: implicitWidth > 0 || isWidget
 
   function rate(bytes) {
     var b = Math.max(0, Number(bytes) || 0)
@@ -60,11 +91,11 @@ Item {
   Loader {
     id: loader
     anchors.verticalCenter: parent.verticalCenter
-    sourceComponent: ({
+    sourceComponent: root.isWidget ? widgetItem : (({
       agents: agentsItem, clock: clockItem, date: dateItem, media: mediaItem,
       wifi: wifiItem, bluetooth: bluetoothItem, battery: batteryItem,
       volume: volumeItem, speed: speedItem, workspaces: workspacesItem, privacy: privacyItem
-    })[root.itemId] || null
+    })[root.itemId] || null)
   }
 
   // Claude's mark (or the agent at work), cycling colours while one works,
@@ -75,12 +106,42 @@ Item {
       spacing: 7
       height: 22
       AgentMark {
+        visible: root.agentGroups.length === 0
         anchors.verticalCenter: parent.verticalCenter
         size: 18
         agent: root.lead && root.lead.agent ? root.lead.agent : "claude"
         working: !!root.lead && (root.lead.state === "working" || root.lead.state === "watching")
         needs: !!root.lead && root.lead.state === "needs"
         motion: root.motion
+      }
+      // Every running agent: a mark each, with how many sessions when more
+      // than one; the ones waiting on you first.
+      Repeater {
+        model: root.agentGroups
+        Row {
+          required property var modelData
+          anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+          spacing: 3
+          AgentMark {
+            anchors.verticalCenter: parent.verticalCenter
+            size: 18
+            agent: parent.modelData.agent
+            working: parent.modelData.state !== "needs"
+            needs: parent.modelData.state === "needs"
+            motion: root.motion
+          }
+          Text {
+            visible: parent.modelData.count > 1
+            anchors.verticalCenter: parent.verticalCenter
+            text: String(parent.modelData.count)
+            textFormat: Text.PlainText
+            color: Theme.secondary
+            font.family: P.sans
+            font.pixelSize: 11
+            font.weight: Font.DemiBold
+            font.features: { "tnum": 1 }
+          }
+        }
       }
       Text {
         visible: root.needsCount > 0
@@ -291,6 +352,20 @@ Item {
           color: modelData.color
         }
       }
+    }
+  }
+
+  // A bar widget placed here (Omarchy's own or a third party's), in a slot
+  // the bar fills.
+  Component {
+    id: widgetItem
+    Item {
+      id: slot
+      property var hosted: null
+      implicitWidth: hosted ? hosted.width : 0
+      height: 22
+      Component.onCompleted: if (root.widgetFactory) hosted = root.widgetFactory(root.itemId.slice(2), slot)
+      Component.onDestruction: if (hosted) hosted.destroy()
     }
   }
 

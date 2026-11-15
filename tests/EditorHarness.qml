@@ -35,7 +35,7 @@ Window {
     anchors.centerIn: parent
     layout: win.scenario === "everything"
       ? ({ left: ["media", "agents", "date"], center: ["clock"], right: ["speed", "volume", "wifi", "bluetooth", "battery"] })
-      : ({ left: ["media"], center: ["agents", "clock"], right: ["wifi", "bluetooth", "battery"] })
+      : ({ left: ["w:omarchy.weather", "media"], center: ["agents", "clock"], right: ["wifi", "bluetooth", "battery"] })
     buttons: [
       { id: "omarchy.keyboard-layout", name: "Keyboard layout" }, { id: "mike.claude-sessions", name: "Claude sessions" },
       { id: "omarchy.agents", name: "Agents" }, { id: "omarchy.bluetooth", name: "Bluetooth" },

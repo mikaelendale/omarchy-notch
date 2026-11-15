@@ -856,9 +856,17 @@ Item {
   // ---- how it looks: frosted (the default) or solid, for the notch and the
   // corners
   readonly property string glass: prefs.glass === "solid" ? "solid" : "frosted"
-  // Attached to the top edge (the default), or floating a little below it,
-  // for the notch and the corners alike.
-  readonly property bool floating: showcase && showcaseStyle ? showcaseStyle === "floating" : prefs.notchStyle === "floating"
+  // Attached to the top edge (the default), floating a little below it, or
+  // unified (one strip across the top that the notch and corners hang from).
+  readonly property string barStyle: {
+    var st = showcase && showcaseStyle ? showcaseStyle : String(prefs.notchStyle || "")
+    return st === "floating" || st === "unified" ? st : "attached"
+  }
+  readonly property bool floating: barStyle === "floating"
+  readonly property bool unified: barStyle === "unified"
+  // Every running agent in the closed notch, not just the one that matters
+  // most (the editor's switch; off unless switched on).
+  readonly property bool allAgents: prefs.allAgents === true
   // The showcase's own attached or floating ("" = yours).
   property string showcaseStyle: ""
   readonly property real topGap: floating ? 8 : 0
@@ -1185,7 +1193,7 @@ Item {
       readonly property bool holdsPopout: {
         var owner = root.activePopout
         if (!owner) return false
-        if (root.isInside(owner, leftEar) || root.isInside(owner, rightEar)) return false
+        if (root.isInside(owner, leftEar) || root.isInside(owner, rightEar) || root.isInside(owner, notch.closedRowItem)) return false
         if (Quickshell.screens.length <= 1) return true
         return root.targetBelongsToWindow(owner, win)
       }
@@ -1285,6 +1293,24 @@ Item {
       readonly property var notchItems: cornersOn ? root.barLayout.center
         : [].concat(root.barLayout.left, root.barLayout.center, root.barLayout.right)
 
+      // A bar widget the editor placed on the closed bar ("w:<id>"): Omarchy's
+      // own widget, bare, with the settings it has in the bar's layout (a
+      // third party's too, such as a workspace grid).
+      Component {
+        id: placedWidgetComponent
+        WidgetHost { register: false; bare: true }
+      }
+      function hostBarWidget(id, parentItem) {
+        var all = [].concat(root.sections.strip, root.sections.menu)
+        var entry = null
+        for (var i = 0; i < all.length; i++) if (all[i].id === id) entry = all[i]
+        return placedWidgetComponent.createObject(parentItem, {
+          host: root, screenName: win.screenName, window: win, modelData: entry || ({ id: id })
+        })
+      }
+      readonly property var widgetFactory: function(id, parentItem) { return win.hostBarWidget(id, parentItem) }
+      readonly property var stripHidden: win.cornerWidgets.concat(Layout.placedWidgets(root.barLayout))
+
       // Omarchy's widgets for the corners' panels, made the first time one is
       // asked for and kept: "left:omarchy.network" -> WidgetHost.
       property var cornerHosts: ({})
@@ -1361,11 +1387,33 @@ Item {
         ]
       }
 
+      // Unified: one strip across the top, in the notch's glass, that the
+      // notch and corners open down from.
+      Rectangle {
+        visible: root.unified
+        width: win.width
+        height: notch.collapsedHeight
+        opacity: notch.opacity
+        gradient: Gradient {
+          GradientStop { position: 0; color: Theme.bodyTop }
+          GradientStop { position: 1; color: Theme.body }
+        }
+        Rectangle {
+          anchors.bottom: parent.bottom
+          width: parent.width
+          height: 1
+          color: Theme.edge
+        }
+      }
+
       Notch {
         id: notch
         anchors.horizontalCenter: parent.horizontalCenter
         y: root.topGap
         floating: root.floating
+        unified: root.unified
+        widgetFactory: win.widgetFactory
+        allAgents: root.allAgents
         maxExpandedWidth: Math.max(600, win.width - 48)
         motion: root.motion
         status: win.screenStatus
@@ -1399,6 +1447,10 @@ Item {
       Ear {
         id: leftEar
         floating: root.floating
+        unified: root.unified
+        widgetFactory: win.widgetFactory
+        sessions: root.claude.sessions
+        allAgents: root.allAgents
         covered: notch.progress > 0.2 && leftEar.inset + leftEar.bodyW + 8 > (win.width - notch.bodyW) / 2
         forceOpen: (root.lowBatteryAlert && items.indexOf("battery") !== -1) || root.showCornerSide === side
         onWorkspaceRequested: function(id) { win.focusWorkspace(id) }
@@ -1425,6 +1477,10 @@ Item {
       Ear {
         id: rightEar
         floating: root.floating
+        unified: root.unified
+        widgetFactory: win.widgetFactory
+        sessions: root.claude.sessions
+        allAgents: root.allAgents
         covered: notch.progress > 0.2 && rightEar.inset + rightEar.bodyW + 8 > (win.width - notch.bodyW) / 2
         forceOpen: (root.lowBatteryAlert && items.indexOf("battery") !== -1) || root.showCornerSide === side
         onWorkspaceRequested: function(id) { win.focusWorkspace(id) }
@@ -1475,7 +1531,7 @@ Item {
       }
       Instantiator {
         model: root.sections.strip
-        delegate: WidgetHost { host: root; screenName: win.screenName; window: win; hiddenIds: win.cornerWidgets }
+        delegate: WidgetHost { host: root; screenName: win.screenName; window: win; hiddenIds: win.stripHidden }
         onObjectAdded: function(index, object) { object.parent = notch.statusSlot }
       }
       // Tray apps, every one of them, at the end of the row.
@@ -1548,14 +1604,16 @@ Item {
       lead: root.lead
       motion: root.motion
       glass: root.glass
-      floating: root.floating
+      barStyle: root.barStyle
+      allAgents: root.allAgents
       screens: root.screenChoices
       cornerScreen: root.cornerScreenPresent ? root.cornerScreen : ""
       fullScreen: root.windowsUnderNotch
       onEdited: function(next) { root.setLayout(next) }
       onButtonMoved: function(id, index) { root.moveButton(id, index) }
       onGlassRequested: function(glass) { root.setPref("glass", glass) }
-      onFloatingRequested: function(on) { root.setPref("notchStyle", on ? "floating" : "attached") }
+      onStyleRequested: function(style) { root.setPref("notchStyle", style) }
+      onAllAgentsRequested: function(on) { root.setPref("allAgents", on) }
       onCornerScreenRequested: function(name) { root.setPref("cornerScreen", name) }
       onFullScreenRequested: function(on) { root.setPref("windowsUnderNotch", on) }
       onCloseRequested: root.editorOpen = false

@@ -150,7 +150,7 @@ Closed, it shows your agent's mark, the time and the privacy dots, like a phone'
 
 **Frosted or solid:** the notch and the corners are frosted glass in your theme's colours, or, with **Solid** in the editor, the theme's colour all the way through.
 
-**Attached or floating:** the notch and the corners hang from the top edge and flare into it, or, with **Floating** in the editor, they're pills of their own a little below it.
+**Attached, floating or unified:** the notch and the corners hang from the top edge and flare into it, or, with **Floating** in the editor, they're pills of their own a little below it, or, with **Unified**, one strip runs across the whole top and they open down from it.
 
 The buttons come from the same `bar.layout` in `~/.config/omarchy/shell.json` that the stock bar uses:
 
@@ -177,10 +177,12 @@ A corner with nothing to show hides. In full-screen mode, and while an app is fu
 Right-click the notch or a corner (or run `notch-look edit`) to change everything about the bar:
 
 - **What the corners and the closed notch show.** It shows the top of your screen in small: drag an item between the left corner, the notch and the right corner, or onto **Not shown** to take it off. Or click an item, then click where it goes (Esc puts it down). Or use the keyboard: the arrows move a ring from item to item, Enter picks it up, the arrows then move it along (Down takes it off, Up puts it back), and Enter puts it down. The items: workspaces, music, agents, the time, the date, the privacy dots, Wi-Fi, Bluetooth, the battery, the volume and the network speed.
+- **Any of the open notch's buttons, onto the closed bar.** Drag one (Omarchy's own widgets, or another plugin's, such as a 2D workspace grid) into a corner or the notch and it shows there all the time, as itself; drag it back to the buttons to put it back. The corner or notch doesn't open when the pointer is on a placed widget, so it can be used where it is. The widget keeps its own settings from the bar's layout in `shell.json`.
 - **Which screens get the corners**, with more than one screen.
+- **Show every running agent:** a mark for each agent at work or waiting on you (Claude, Codex, OpenCode...), with how many sessions it has, instead of just the one that matters most. Off unless you switch it on.
 - **The open notch's cards:** System, Notifications, Music, Today and Agents, in any order, any of them off.
 - **The open notch's buttons:** Omarchy's buttons, reordered (through `omarchy bar move`).
-- **Frosted or Solid**, **Attached or Floating**, and **Full screen**.
+- **Frosted or Solid**, **Attached, Floating or Unified**, and **Full screen**.
 
 Changes apply as they land; **Reset** puts the defaults back. It's all saved in `~/.local/state/mike-notch/prefs.json`. What the editor does goes into the shell's log, prefixed `mike.notch editor:`.
 

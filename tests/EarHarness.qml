@@ -20,9 +20,11 @@ Window {
   readonly property string outDir: args.length > 1 ? args[args.length - 2] : "/tmp"
   readonly property string rawScenario: args.length > 0 ? args[args.length - 1] : "closed"
   readonly property bool light: rawScenario.indexOf("-light") !== -1
-  readonly property string scenario: rawScenario.replace("-light", "").replace("float-", "")
-  // A "float-" prefix draws the floating look (a pill below the edge).
+  readonly property string scenario: rawScenario.replace("-light", "").replace("float-", "").replace("unified-", "")
+  // A "float-" prefix draws the floating look (a pill below the edge), a
+  // "unified-" prefix the unified one (one strip across the top).
   readonly property bool floating: rawScenario.indexOf("float-") === 0
+  readonly property bool unified: rawScenario.indexOf("unified-") === 0
   Component.onCompleted: if (light) Theme.apply(({ mode: "light", accent: "#1e66f5", background: "#eff1f5", foreground: "#4c4f69" }))
 
   readonly property var layout: scenario === "everything"
@@ -60,8 +62,21 @@ Window {
     }
   }
 
+  // The unified strip (Bar.qml draws it on screen).
+  Rectangle {
+    visible: win.unified
+    width: win.width
+    height: 34
+    gradient: Gradient {
+      GradientStop { position: 0; color: Theme.bodyTop }
+      GradientStop { position: 1; color: Theme.body }
+    }
+    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.edge }
+  }
+
   Ear {
     id: left
+    unified: win.unified
     x: 0
     floating: win.floating
     side: "left"
@@ -79,6 +94,7 @@ Window {
     anchors.horizontalCenter: parent.horizontalCenter
     y: win.floating ? 8 : 0
     floating: win.floating
+    unified: win.unified
     items: win.layout.center
     seeThroughWhenIdle: false
     status: win.status
@@ -91,6 +107,7 @@ Window {
     id: right
     x: win.width - width
     floating: win.floating
+    unified: win.unified
     side: "right"
     items: win.layout.right
     status: win.status

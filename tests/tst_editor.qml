@@ -29,8 +29,10 @@ Item {
     onGlassRequested: function(g) { lastGlass = g; glass = g }
     property var lastFull: null
     onFullScreenRequested: function(on) { lastFull = on; fullScreen = on }
-    property var lastFloating: null
-    onFloatingRequested: function(on) { lastFloating = on; floating = on }
+    property string lastStyle: ""
+    onStyleRequested: function(style) { lastStyle = style; barStyle = style }
+    property var lastAllAgents: null
+    onAllAgentsRequested: function(on) { lastAllAgents = on; allAgents = on }
   }
   SignalSpy { id: closeSpy; target: editor; signalName: "closeRequested" }
 
@@ -200,13 +202,40 @@ Item {
       var floatOpt = findChild(editor, "option-floating")
       var q = floatOpt.mapToItem(scene, floatOpt.width / 2, floatOpt.height / 2)
       mouseClick(scene, q.x, q.y)
-      compare(editor.lastFloating, true, "Floating")
+      compare(editor.lastStyle, "floating", "Floating")
+      var uni = findChild(editor, "option-unified")
+      q = uni.mapToItem(scene, uni.width / 2, uni.height / 2)
+      mouseClick(scene, q.x, q.y)
+      compare(editor.lastStyle, "unified", "Unified")
+      var sw2 = findChild(editor, "allAgentsSwitch")
+      q = sw2.mapToItem(scene, sw2.width / 2, sw2.height / 2)
+      mouseClick(scene, q.x, q.y)
+      compare(editor.lastAllAgents, true, "Show every running agent")
       var sw = findChild(editor, "fullScreenSwitch")
       p = sw.mapToItem(scene, sw.width / 2, sw.height / 2)
       mouseClick(scene, p.x, p.y)
       compare(editor.lastFull, true)
       mouseClick(scene, p.x, p.y)
       compare(editor.lastFull, false)
+    }
+
+    function test_place_a_button_on_the_bar_and_back() {
+      // Drag button Bravo into the left corner: it's placed there as a widget
+      // and leaves the row of buttons.
+      var music = centre(chip("media"))
+      drag(centre(chip("b", "button")), Qt.point(music.x + 50, music.y))
+      verify(editor.saved, "placed")
+      compare(JSON.stringify(editor.saved.left), JSON.stringify(["media", "w:b"]))
+      wait(50)
+      compare(chip("b", "button"), null, "no longer among the buttons")
+      var placedChip = chip("w:b")
+      verify(placedChip, "shown in the left corner")
+      compare(placedChip.label, "Bravo", "by its name")
+      // And back to the buttons.
+      drag(centre(placedChip), centre(chip("a", "button")))
+      compare(JSON.stringify(editor.saved.left), JSON.stringify(["media"]), "taken off the bar")
+      wait(50)
+      verify(chip("b", "button"), "a button again")
     }
 
     function test_reorder_buttons() {
@@ -259,6 +288,26 @@ Item {
     property var lastWheel: null
     onWorkspaceRequested: function(id) { lastWs = id }
     onWheelRequested: function(kind, steps) { lastWheel = { kind: kind, steps: steps } }
+  }
+  Ear {
+    id: withWidget
+    x: 380
+    y: 700
+    side: "left"
+    items: ["w:grid", "wifi"]
+    status: ({ wifi: { kind: "wifi", strength: 0.8, name: "Home" } })
+    widgetFactory: function(id, parentItem) {
+      // Like Omarchy's widgets: no width until it's visible.
+      return Qt.createQmlObject('import QtQuick; Rectangle { objectName: "placed-' + id + '"; width: visible ? 40 : 0; height: 18; color: "teal" }', parentItem)
+    }
+  }
+  StatusItem {
+    id: marks
+    x: 700
+    y: 960
+    itemId: "agents"
+    allAgents: true
+    sessions: [{ agent: "claude", state: "working" }, { agent: "codex", state: "needs" }, { agent: "claude", state: "working" }, { agent: "opencode", state: "idle" }]
   }
   NotificationsCard {
     id: notes
@@ -402,6 +451,26 @@ Item {
       var p = pill.mapToItem(scene, pill.width / 2, pill.height / 2)
       mouseClick(scene, p.x, p.y)
       compare(player.last, "switchPlayer", "and switches, without also going to the window")
+    }
+
+    function test_placed_widget_keeps_the_corner_shut() {
+      var w = findChild(withWidget, "placed-grid")
+      verify(w, "the bar's factory put the widget in the corner")
+      var p = w.mapToItem(scene, w.width / 2, w.height / 2)
+      mouseMove(scene, p.x, p.y)
+      wait(400)
+      verify(!withWidget.open, "hovering the widget leaves the corner shut")
+      mouseMove(scene, p.x + 40, p.y)
+      tryVerify(function() { return withWidget.open }, 800, "hovering Wi-Fi opens it")
+      mouseMove(scene, 700, 300)
+    }
+
+    function test_every_running_agent() {
+      compare(marks.agentGroups.length, 2, "a mark per agent at work or waiting (idle ones aside)")
+      compare(marks.agentGroups[0].agent, "codex", "waiting on you first")
+      compare(marks.agentGroups[1].count, 2, "two Claude sessions")
+      marks.allAgents = false
+      compare(marks.agentGroups.length, 0, "off: the single mark, as before")
     }
 
     function test_hides_when_nothing_plays() {
