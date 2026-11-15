@@ -80,11 +80,11 @@ Item {
     return out
   }
   property int revealStep: 0
-  Timer {
-    running: root.revealing && root.visible
-    repeat: true
-    interval: Motion.beat
-    onTriggered: {
+  // On the shared beat, with everything else that moves on its own.
+  Connections {
+    target: Motion
+    enabled: root.revealing && root.visible
+    function onTickChanged() {
       root.revealStep = (root.revealStep + 1) % root.revealSteps.length
       root.reveal = root.revealSteps[root.revealStep]
     }

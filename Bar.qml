@@ -13,6 +13,7 @@ import qs.Commons
 import "Palette.js" as P
 import "Layout.js" as Layout
 import "Players.js" as Players
+import "Machine.js" as Machine
 
 // A replacement for Omarchy's bar (kind "bar"): one notch per screen.
 //
@@ -257,13 +258,11 @@ Item {
     stdout: StdioCollector {
       onStreamFinished: {
         var f = String(text).trim().split(/\s+/)
-        var memKb = Number(f[0]) || 0, cpus = Number(f[1]) || 0
-        root.modestMachine = (memKb > 0 && memKb <= 4.2 * 1024 * 1024) || (cpus > 0 && cpus <= 2)
+        root.modestMachine = Machine.isModest(f[0], f[1])
       }
     }
   }
-  readonly property string motionLevel: motionChoice !== "auto" ? motionChoice
-    : (Style.duration(100) <= 0 ? "off" : (modestMachine ? "light" : "smooth"))
+  readonly property string motionLevel: Machine.level(motionChoice, Style.duration(100) > 0, modestMachine)
   Binding { target: Motion; property: "level"; value: root.motionLevel }
   readonly property real motion: Motion.scale
 

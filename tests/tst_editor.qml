@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import ".."
 import "../Layout.js" as L
+import "../Machine.js" as Machine
 
 // Pointer tests for the top bar's editor and the corners:
 //   QT_QPA_PLATFORM=offscreen qmltestrunner -input tests/tst_editor.qml
@@ -484,6 +485,19 @@ Item {
       compare(marks.agentGroups[1].count, 2, "two Claude sessions")
       marks.allAgents = false
       compare(marks.agentGroups.length, 0, "off: the single mark, as before")
+    }
+
+    function test_auto_motion_for_the_machine() {
+      var gb = 1024 * 1024
+      verify(Machine.isModest(2 * gb, 2), "a 2 GB, 2-thread machine is modest")
+      verify(Machine.isModest(1.9 * gb, 8), "under 2 GB, whatever the threads")
+      verify(Machine.isModest(3.8 * gb, 4), "4 GB fitted (the kernel reports a little less)")
+      verify(Machine.isModest(16 * gb, 2), "2 threads, whatever the memory")
+      verify(!Machine.isModest(15.3 * gb, 12), "this machine isn't")
+      compare(Machine.level("auto", true, Machine.isModest(2 * gb, 2)), "light", "Auto on a 2 GB machine: Light")
+      compare(Machine.level("auto", true, false), "smooth", "Auto elsewhere: Smooth")
+      compare(Machine.level("auto", false, false), "off", "Auto with Omarchy's animations off: Off")
+      compare(Machine.level("smooth", true, true), "smooth", "a choice is kept")
     }
 
     function test_motion_levels() {

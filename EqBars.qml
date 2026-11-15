@@ -23,13 +23,15 @@ Row {
   readonly property var restLevels: [0.55, 0.9, 0.7, 0.45]
   property var levels: restLevels
 
-  Timer {
-    running: root.playing && Motion.ambient && root.motion > 0 && root.visible
-    repeat: true
-    interval: Motion.beat
-    onTriggered: root.levels = [0.25 + Math.random() * 0.75, 0.25 + Math.random() * 0.75,
-                                0.25 + Math.random() * 0.75, 0.25 + Math.random() * 0.75]
-    onRunningChanged: if (!running) root.levels = root.restLevels
+  readonly property bool stepping: root.playing && Motion.ambient && root.motion > 0 && root.visible
+  onSteppingChanged: if (!stepping) root.levels = root.restLevels
+  Connections {
+    target: Motion
+    enabled: root.stepping
+    function onTickChanged() {
+      root.levels = [0.25 + Math.random() * 0.75, 0.25 + Math.random() * 0.75,
+                     0.25 + Math.random() * 0.75, 0.25 + Math.random() * 0.75]
+    }
   }
 
   Repeater {

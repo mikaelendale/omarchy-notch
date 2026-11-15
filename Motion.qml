@@ -25,4 +25,15 @@ QtObject {
   // Things that move on their own.
   readonly property bool ambient: level === "smooth"
   readonly property int beat: 160
+
+  // One shared beat for everything that moves on its own, so the music's bars
+  // and every working agent step in the same frame: one repaint per beat for
+  // all of them, not one each.
+  property int tick: 0
+  property Timer beatTimer: Timer {
+    running: Motion.ambient
+    repeat: true
+    interval: Motion.beat
+    onTriggered: Motion.tick++
+  }
 }
