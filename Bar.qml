@@ -1373,13 +1373,13 @@ Item {
         height: Math.max(1, Math.ceil(notch.bodyH))
         regions: [
           Region {
-            x: Math.floor(leftEar.inset)
+            x: Math.floor(leftEar.inset + leftEar.extraX)
             y: Math.floor(leftEar.inset)
             width: leftEar.covered ? 0 : Math.ceil(leftEar.bodyW)
             height: Math.ceil(leftEar.bodyH)
           },
           Region {
-            x: Math.floor(win.width - rightEar.bodyW - rightEar.inset)
+            x: Math.floor(win.width - rightEar.bodyW - rightEar.inset - rightEar.extraX)
             y: Math.floor(rightEar.inset)
             width: rightEar.covered ? 0 : Math.ceil(rightEar.bodyW)
             height: Math.ceil(rightEar.bodyH)
@@ -1387,23 +1387,24 @@ Item {
         ]
       }
 
-      // Unified: one strip across the top, in the notch's glass, that the
-      // notch and corners open down from.
-      Rectangle {
+      // Unified: one long bar across the top, a gap from either side, that
+      // stretches to the screen's edges while the notch or a corner is open,
+      // so what opens hangs from one piece (UnifiedStrip.qml).
+      property real stripT: root.unified && (notch.open || leftEar.open || rightEar.open) ? 1 : 0
+      Behavior on stripT { enabled: root.motion > 0; SpringAnimation { spring: 9.0; damping: 0.8; epsilon: 0.001 } }
+      readonly property real stripGap: 10
+      // How far in from the side the corners sit while the strip keeps its gap.
+      readonly property real stripIn: root.unified ? (stripGap + 12) * (1 - stripT) : 0
+      UnifiedStrip {
         visible: root.unified
-        width: win.width
-        height: notch.collapsedHeight
+        screenWidth: win.width
+        gap: win.stripGap
+        barHeight: notch.collapsedHeight
+        expand: win.stripT
         opacity: notch.opacity
-        gradient: Gradient {
-          GradientStop { position: 0; color: Theme.bodyTop }
-          GradientStop { position: 1; color: Theme.body }
-        }
-        Rectangle {
-          anchors.bottom: parent.bottom
-          width: parent.width
-          height: 1
-          color: Theme.edge
-        }
+        leftDrop: ({ width: leftEar.bodyW, height: leftEar.covered ? 0 : leftEar.bodyH - notch.collapsedHeight })
+        centerDrop: ({ width: notch.bodyW, height: notch.bodyH - notch.collapsedHeight })
+        rightDrop: ({ width: rightEar.bodyW, height: rightEar.covered ? 0 : rightEar.bodyH - notch.collapsedHeight })
       }
 
       Notch {
@@ -1448,10 +1449,11 @@ Item {
         id: leftEar
         floating: root.floating
         unified: root.unified
+        extraX: win.stripIn
         widgetFactory: win.widgetFactory
         sessions: root.claude.sessions
         allAgents: root.allAgents
-        covered: notch.progress > 0.2 && leftEar.inset + leftEar.bodyW + 8 > (win.width - notch.bodyW) / 2
+        covered: notch.progress > 0.2 && leftEar.inset + leftEar.extraX + leftEar.bodyW + 8 > (win.width - notch.bodyW) / 2
         forceOpen: (root.lowBatteryAlert && items.indexOf("battery") !== -1) || root.showCornerSide === side
         onWorkspaceRequested: function(id) { win.focusWorkspace(id) }
         onWheelRequested: function(kind, steps) { root.wheelAction(kind, steps, win) }
@@ -1478,10 +1480,11 @@ Item {
         id: rightEar
         floating: root.floating
         unified: root.unified
+        extraX: win.stripIn
         widgetFactory: win.widgetFactory
         sessions: root.claude.sessions
         allAgents: root.allAgents
-        covered: notch.progress > 0.2 && rightEar.inset + rightEar.bodyW + 8 > (win.width - notch.bodyW) / 2
+        covered: notch.progress > 0.2 && rightEar.inset + rightEar.extraX + rightEar.bodyW + 8 > (win.width - notch.bodyW) / 2
         forceOpen: (root.lowBatteryAlert && items.indexOf("battery") !== -1) || root.showCornerSide === side
         onWorkspaceRequested: function(id) { win.focusWorkspace(id) }
         onWheelRequested: function(kind, steps) { root.wheelAction(kind, steps, win) }

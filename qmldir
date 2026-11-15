@@ -31,3 +31,4 @@ Editor 1.0 Editor.qml
 EditorChip 1.0 EditorChip.qml
 SystemCard 1.0 SystemCard.qml
 NotificationsCard 1.0 NotificationsCard.qml
+UnifiedStrip 1.0 UnifiedStrip.qml

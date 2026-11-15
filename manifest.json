@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "mike.notch",
   "name": "Notch",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "author": "Mike",
   "license": "MIT",
   "description": "A frosted notch for the top of the screen in your theme's colours, with a corner on each side for your workspaces, music and status icons, opening into cards for your machine, notifications and coding agents. Everything is movable with a right-click editor. With a matching dock.",

@@ -150,7 +150,7 @@ Closed, it shows your agent's mark, the time and the privacy dots, like a phone'
 
 **Frosted or solid:** the notch and the corners are frosted glass in your theme's colours, or, with **Solid** in the editor, the theme's colour all the way through.
 
-**Attached, floating or unified:** the notch and the corners hang from the top edge and flare into it, or, with **Floating** in the editor, they're pills of their own a little below it, or, with **Unified**, one strip runs across the whole top and they open down from it.
+**Attached, floating or unified:** the notch and the corners hang from the top edge and flare into it, or, with **Floating** in the editor, they're pills of their own a little below it, or, with **Unified**, one long bar runs across the top, a little in from either side; when the notch or a corner opens, the bar stretches out to the screen's edges and what opens grows down out of it, all one piece.
 
 The buttons come from the same `bar.layout` in `~/.config/omarchy/shell.json` that the stock bar uses:
 

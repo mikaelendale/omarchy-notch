@@ -190,7 +190,8 @@ Item {
     id: shape
     anchors.horizontalCenter: parent.horizontalCenter
     y: root.unified ? root.collapsedHeight : 0
-    visible: bodyHeight > 0.5
+    // Unified: the bar draws this, as part of its own outline.
+    visible: !root.unified && bodyHeight > 0.5
     bodyWidth: root.bodyW
     bodyHeight: root.unified ? Math.max(0, root.bodyH - root.collapsedHeight) : root.bodyH
     radius: root.bodyR

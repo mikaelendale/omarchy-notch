@@ -12,7 +12,7 @@ import ".."
 Window {
   id: win
   width: 1440
-  height: 330
+  height: 360
   visible: true
   color: "#d9d7d2"
 
@@ -62,21 +62,21 @@ Window {
     }
   }
 
-  // The unified strip (Bar.qml draws it on screen).
-  Rectangle {
+  // The unified strip, stretching as a corner opens (Bar.qml does this on screen).
+  readonly property real stripT: win.unified ? Math.max(left.progress, right.progress, centre.progress) : 0
+  UnifiedStrip {
     visible: win.unified
-    width: win.width
-    height: 34
-    gradient: Gradient {
-      GradientStop { position: 0; color: Theme.bodyTop }
-      GradientStop { position: 1; color: Theme.body }
-    }
-    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.edge }
+    screenWidth: win.width
+    expand: win.stripT
+    leftDrop: ({ width: left.bodyW, height: left.bodyH - 34 })
+    centerDrop: ({ width: centre.bodyW, height: centre.bodyH - 34 })
+    rightDrop: ({ width: right.bodyW, height: right.bodyH - 34 })
   }
 
   Ear {
     id: left
     unified: win.unified
+    extraX: win.unified ? 22 * (1 - win.stripT) : 0
     x: 0
     floating: win.floating
     side: "left"
@@ -91,7 +91,9 @@ Window {
   }
 
   Notch {
+    id: centre
     anchors.horizontalCenter: parent.horizontalCenter
+    forceOpen: win.scenario === "notch"
     y: win.floating ? 8 : 0
     floating: win.floating
     unified: win.unified
@@ -108,6 +110,7 @@ Window {
     x: win.width - width
     floating: win.floating
     unified: win.unified
+    extraX: win.unified ? 22 * (1 - win.stripT) : 0
     side: "right"
     items: win.layout.right
     status: win.status

@@ -41,8 +41,11 @@ Item {
   property bool floating: false
   readonly property real inset: floating ? 8 : 0
   // Unified: the bar draws one strip across the top; this corner's own body
-  // only shows when it opens, hanging from that strip.
+  // only shows when it opens, hanging from that strip. While the strip keeps
+  // a gap from the screen's side, the corner sits that much further in
+  // (extraX, from the bar), and slides out with the strip as it stretches.
   property bool unified: false
+  property real extraX: 0
   // Bar widgets placed here, and every running agent (see StatusItem).
   property var widgetFactory: null
   property var sessions: []
@@ -117,7 +120,7 @@ Item {
   readonly property real openOpacity: clamp01((progress - 0.5) / 0.4)
 
   // Big enough for the open corner, so the window never resizes.
-  implicitWidth: Math.max(expandedWidth, collapsedTarget) + flare + inset
+  implicitWidth: Math.max(expandedWidth, collapsedTarget) + flare + inset + extraX
   implicitHeight: expandedHeight + flare + inset
 
   readonly property bool hovered: hover.hovered
@@ -167,7 +170,7 @@ Item {
   // panels open under the corner. They never take the pointer.
   Item {
     id: panelSlotItem
-    x: root.mirrored ? root.width - root.inset - root.edgePad - width : root.inset + root.edgePad
+    x: root.mirrored ? root.width - root.inset - root.extraX - root.edgePad - width : root.inset + root.extraX + root.edgePad
     y: root.inset
     width: Math.max(32, closedRow.width)
     height: root.collapsedHeight
@@ -176,7 +179,9 @@ Item {
   }
 
   EarShape {
-    x: root.mirrored ? root.width - width - root.inset : root.inset
+    // Unified: the bar draws this, as part of its own outline.
+    visible: !root.unified
+    x: root.mirrored ? root.width - width - root.inset - root.extraX : root.inset + root.extraX
     y: root.unified ? root.collapsedHeight : root.inset
     floating: root.floating
     mirrored: root.mirrored
@@ -188,7 +193,7 @@ Item {
 
   Item {
     id: hit
-    x: root.mirrored ? root.width - width - root.inset : root.inset
+    x: root.mirrored ? root.width - width - root.inset - root.extraX : root.inset + root.extraX
     y: root.inset
     width: root.bodyW
     height: root.bodyH
