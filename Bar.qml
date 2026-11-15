@@ -312,7 +312,20 @@ Item {
     // Opening a player: the right position at once, not a second later.
     onRunningChanged: if (running) triggered()
   }
-  readonly property var media: {
+  // The showcase's song: playing, silent (nothing actually plays), so the
+  // bar can be seen, and measured, with music going.
+  readonly property var showcaseMedia: ({
+    available: true, playing: true, title: "Lose My Mind", artist: "Showcase", artUrl: "", identity: "Music",
+    position: 64, length: 212, canSeek: false, canNext: true, canPrevious: true, canRaise: false,
+    shuffleSupported: false, shuffle: false, loopSupported: false, loop: "none", rateSupported: false, rate: 1,
+    players: [], playerKey: ""
+  })
+  readonly property var media: showcase || loadTest ? showcaseMedia : realMedia
+  // `omarchy-shell mike.notch loadTest true|false` (for measuring): your own
+  // layout, with a silent song playing and agents all at work, the load that
+  // used to keep the bar repainting non-stop.
+  property bool loadTest: false
+  readonly property var realMedia: {
     var tick = mediaTick
     var p = player
     if (!p) return ({ available: false })
@@ -659,6 +672,13 @@ Item {
     // for a minute and a half: for screenshots.
     function showcase(): void { root.previewSessions(); root.showcase = true; showcaseEnd.restart() }
     function showcaseEnd(): void { root.showcase = false; root.showCornerSide = ""; root.showcaseStyle = "" }
+    function loadTest(on: bool): void {
+      root.loadTest = on
+      root.agentsPreview = on ? ({ counts: {}, sessions: [
+        { id: "t1", agent: "claude", agentName: "Claude", label: "Load test one", state: "working" },
+        { id: "t2", agent: "claude", agentName: "Claude", label: "Load test two", state: "working" },
+        { id: "t3", agent: "codex", agentName: "Codex", label: "Load test three", state: "working" }] }) : null
+    }
     // The showcase attached or floating ("attached", "floating", or "" for yours).
     function showcaseStyle(style: string): void { root.showcaseStyle = style }
     // Hold a corner open ("left", "right" or "" for neither), for screenshots.
