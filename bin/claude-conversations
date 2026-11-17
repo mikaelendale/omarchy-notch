@@ -582,7 +582,12 @@ def pick_conversation():
         if session["kind"] == "background" or session["kind"] == "bg":
             open_terminal(cwd or HOME, account_env(home) + ["claude", "attach", sid])
             return "done", None
-        notify("That conversation is already open", "It's running in a terminal Hyprland can't see (pid %d)." % session["pid"])
+        # No window to focus (pc-bot, `claude -p`, ssh): open a copy so the
+        # running process keeps sole ownership of the original transcript.
+        if not cwd or not os.path.isdir(cwd):
+            notify("Can't open this conversation", "Its folder is gone: %s" % (cwd or "unknown"))
+            return "again", None
+        open_terminal(cwd, account_env(home) + ["claude", "--permission-mode", "auto", "--resume", sid, "--fork-session"])
         return "done", None
     return ("done", None) if resume(sid, home, cwd) else ("again", None)
 
