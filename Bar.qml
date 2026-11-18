@@ -488,7 +488,20 @@ Item {
         } catch (e) {}
       }
     }
-    onExited: restartSessions.start()
+    onExited: function(code, status) {
+      console.warn("mike.notch agents: collector stopped (" + code + "), restarting")
+      restartSessions.start()
+    }
+    // Stopped any other way (it failed to start, or was stopped by hand):
+    // `exited` may never come, so start it again from here too.
+    onRunningChanged: if (!running) restartSessions.start()
+  }
+  // A last net: whatever stopped it, it's never off for more than 15 s.
+  Timer {
+    interval: 15000
+    repeat: true
+    running: true
+    onTriggered: if (!sessions.running && !restartSessions.running) sessions.running = true
   }
 
   // The agent `omarchy agent` starts: its mark stands in when nothing's running.
